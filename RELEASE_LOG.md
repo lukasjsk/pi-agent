@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Versions are maintained for reference only; no release artifacts are published.
 
+## v1.2
+
+### Added
+
+- A global `require-ripgrep` Pi extension that overrides the search tool metadata to advertise its ripgrep (`rg`) implementation and blocks direct `grep`, `egrep`, and `fgrep` invocations through Pi's `bash` tool, returning an actionable `rg` replacement message.
+
 ## v1.1
 
 ### Added
