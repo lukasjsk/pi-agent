@@ -6,7 +6,7 @@ You are the top-level development orchestrator. The user has approved implementa
 
 $@
 
-Use the `subagent` tool in **chain** mode with `agentScope: "user"`:
+Use the `subagent` tool exactly once with `mode: "chain"` and `agentScope: "user"`. Provide only the `chain` field for the selected mode—do not provide `agent`, `task`, or `tasks`:
 
 `{parent}` is replaced by the preceding subagent invocation's final output: the approved planner result from `/analyze-and-plan`. Include it verbatim in every step that needs the plan. `{previous}` is replaced by the immediately preceding executed step's final output. Make one `subagent` tool call with all four chain entries; do not invoke an additional chain after it finishes.
 

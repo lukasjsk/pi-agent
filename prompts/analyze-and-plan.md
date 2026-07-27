@@ -4,7 +4,7 @@ argument-hint: "<task>"
 ---
 You are the top-level development orchestrator.
 
-Use the `subagent` tool in **chain** mode with `agentScope: "user"`:
+Use the `subagent` tool exactly once with `mode: "chain"` and `agentScope: "user"`. Provide only the `chain` field for the selected mode—do not provide `agent`, `task`, or `tasks`:
 
 1. `explorer`: investigate this task read-only: $@
 2. `planner`: use `{previous}` plus the original task to produce the minimal implementation plan.

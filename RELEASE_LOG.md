@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Versions are maintained for reference only; no release artifacts are published.
 
+## v1.3
+
+### Fixed
+
+- The `subagent` extension now requires an explicit invocation mode (`single`, `parallel`, or `chain`) and discards stale fields from other modes before validation. This prevents chained workflows such as `/analyze-and-plan` from failing when a provider retains fields from an earlier single or parallel tool-call shape.
+
 ## v1.2
 
 ### Added

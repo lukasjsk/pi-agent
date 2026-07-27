@@ -94,11 +94,13 @@ A chain step may set `skipIfPreviousIncludes` to skip itself when the preceding 
 
 ## Tool Modes
 
-| Mode | Parameter | Description |
-|------|-----------|-------------|
-| Single | `{ agent, task }` | One agent, one task |
-| Parallel | `{ tasks: [...] }` | Multiple agents run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential with `{previous}` (prior executed chain step) and `{parent}` (prior subagent invocation) placeholders; each step may use `skipIfPreviousIncludes` |
+| Mode | Required arguments | Description |
+|------|--------------------|-------------|
+| Single | `{ mode: "single", agent, task }` | One agent, one task |
+| Parallel | `{ mode: "parallel", tasks: [...] }` | Multiple agents run concurrently (max 8, 4 concurrent) |
+| Chain | `{ mode: "chain", chain: [...] }` | Sequential with `{previous}` (prior executed chain step) and `{parent}` (prior subagent invocation) placeholders; each step may use `skipIfPreviousIncludes` |
+
+Pass fields only for the selected `mode`. The tool strips stale fields from other modes as a compatibility safeguard for providers that retain optional fields while constructing a tool call, but new calls must set `mode` explicitly.
 
 ## Output Display
 

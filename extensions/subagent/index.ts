@@ -33,6 +33,7 @@ import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { shouldSkipStep } from "./chain-conditions.ts";
 import { formatChainStatus } from "./chain-status.ts";
+import { normalizeSubagentArguments, type SubagentMode } from "./mode.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -563,6 +564,10 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const SubagentParams = Type.Object({
+	mode: StringEnum(["single", "parallel", "chain"] as const, {
+		description:
+			'Invocation mode. Use "single" with agent + task, "parallel" with tasks, or "chain" with chain. Supply only fields for the selected mode.',
+	}),
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
@@ -580,13 +585,15 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous}; {parent} carries the prior invocation's final output).",
+			"Set mode to exactly one of single, parallel, or chain. Supply only that mode's fields: single (agent + task), parallel (tasks array), or chain (sequential with {previous}; {parent} carries the prior invocation's final output).",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
 		parameters: SubagentParams,
+		prepareArguments: normalizeSubagentArguments,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const mode: SubagentMode = params.mode;
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
@@ -602,7 +609,6 @@ export default function (pi: ExtensionAPI) {
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
 			const hasSingle = Boolean(params.agent && params.task);
-			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
 			const chainTotalSteps = params.chain?.length ?? 0;
 			const makeDetails =
@@ -615,16 +621,11 @@ export default function (pi: ExtensionAPI) {
 					results,
 				});
 
-			if (modeCount !== 1) {
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+			if ((mode === "chain" && !hasChain) || (mode === "parallel" && !hasTasks) || (mode === "single" && !hasSingle)) {
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}`,
-						},
-					],
-					details: makeDetails("single")([]),
+					content: [{ type: "text", text: `Invalid ${mode} parameters. Supply the fields required by mode: ${mode}.` }],
+					details: makeDetails(mode)([]),
+					isError: true,
 				};
 			}
 
@@ -648,12 +649,12 @@ export default function (pi: ExtensionAPI) {
 					if (!ok)
 						return {
 							content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+							details: makeDetails(mode)([]),
 						};
 				}
 			}
 
-			if (params.chain && params.chain.length > 0) {
+			if (mode === "chain" && params.chain && params.chain.length > 0) {
 				const results: SingleResult[] = [];
 				let previousOutput = "";
 				const needsParentOutput = params.chain.some((step) => step.task.includes("{parent}"));
@@ -741,7 +742,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			if (params.tasks && params.tasks.length > 0) {
+			if (mode === "parallel" && params.tasks && params.tasks.length > 0) {
 				if (params.tasks.length > MAX_PARALLEL_TASKS)
 					return {
 						content: [
@@ -825,7 +826,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			if (params.agent && params.task) {
+			if (mode === "single" && params.agent && params.task) {
 				const result = await runSingleAgent(
 					ctx.cwd,
 					agents,
