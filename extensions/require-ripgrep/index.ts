@@ -4,7 +4,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 
-import { invokesForbiddenGrep, ripgrepReplacementGuidance } from "./require-ripgrep-rules.ts";
+import { invokesForbiddenGrep, ripgrepReplacementGuidance } from "./rules.ts";
 
 export default function (pi: ExtensionAPI) {
   // Pi's built-in `grep` already runs ripgrep. Override its public definition so

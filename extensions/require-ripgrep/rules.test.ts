@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { invokesForbiddenGrep, ripgrepReplacementGuidance } from "./require-ripgrep-rules.ts";
+import { invokesForbiddenGrep, ripgrepReplacementGuidance } from "./rules.ts";
 
 test("blocks grep used to post-filter ripgrep output", () => {
 	assert.equal(

@@ -14,6 +14,7 @@ This log records notable functionality added to this configuration repository. V
 
 ### Fixed
 
+- The `require-ripgrep` extension moved to an `extensions/require-ripgrep/` subdirectory with `index.ts` as its entry point. Its `rules.ts` helper module and `rules.test.ts` test file no longer sit directly in the extensions directory, so Pi stops trying to load them as standalone extensions and no longer reports "Extension does not export a valid factory function" errors for them.
 - The `require-ripgrep` extension now explicitly prohibits `grep`, `egrep`, and `fgrep` in Bash pipelines, and its rejection guidance explains how to replace post-filtering with an `rg --glob` exclusion.
 - Delegated Pi processes now exclude the `subagent` tool. Only the top-level orchestrator can start agent attempts; subagents cannot create nested subagents.
 
