@@ -8,6 +8,10 @@ This log records notable functionality added to this configuration repository. V
 
 - The `subagent` extension now creates a bounded handover for every completed agent attempt, stores it in the session’s tool-result details, and automatically supplies active-branch handovers to later subagents. The parent orchestrator can inspect the ledger with the new `handover` tool.
 
+### Changed
+
+- `/analyze-and-plan` now closes with explicit next steps: approve a clean plan by running `/implement-and-review` without arguments, answer open decisions with `/implement-and-review {decisions}`, or continue the analysis by re-running `/analyze-and-plan` with additional questions or new information. Planner results now echo the original task in a `## Task` section, so `/implement-and-review` no longer requires the task to be re-stated and treats any arguments as user decisions.
+
 ### Fixed
 
 - Delegated Pi processes now exclude the `subagent` tool. Only the top-level orchestrator can start agent attempts; subagents cannot create nested subagents.

@@ -46,7 +46,12 @@ Restart Pi after installing or changing extensions. Select the theme with Pi's t
 
 ## Development workflow
 
-Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. It stops for approval; execute the approved work with `/implement-and-review <task>`. The agents are intentionally scoped as follows:
+Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. It stops for approval and closes with one of two statuses:
+
+- `## READY_TO_IMPLEMENT` — no open questions; run `/implement-and-review` (no arguments) to execute the approved work.
+- `## REQUIRES_APPROVAL` — open decisions; answer them with `/implement-and-review {decisions}`, or continue the analysis with `/analyze-and-plan {additional questions or new information}` when further reconnaissance is needed.
+
+The approved plan is carried between the two commands automatically (the `subagent` extension's `{parent}` placeholder and handover reports), so the task does not need to be re-stated. The agents are intentionally scoped as follows:
 
 1. **Explorer** gathers concise implementation context without modifying files.
 2. **Planner** produces a minimal plan and marks material decisions with `## REQUIRES_APPROVAL`.

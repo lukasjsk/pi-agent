@@ -11,6 +11,9 @@ If the plan changes a public API, schema, dependency/lockfile, configuration con
 
 Then provide:
 
+## Task
+- The original task you were given, verbatim.
+
 ## Plan
 1. Exact file and change.
 2. Exact file and change.
@@ -23,4 +26,4 @@ Then provide:
 
 Do not invent requirements. Keep the plan short enough for an implementer to execute directly.
 
-End with `## Handover` that repeats the approval status, plan, verification commands, expected scope, and unresolved decisions. Downstream agents receive this section automatically.
+End with `## Handover` that repeats the approval status, the task, plan, verification commands, expected scope, and unresolved decisions. Downstream agents receive this section automatically.
