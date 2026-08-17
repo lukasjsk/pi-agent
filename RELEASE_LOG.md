@@ -14,6 +14,7 @@ This log records notable functionality added to this configuration repository. V
 
 ### Fixed
 
+- The `require-ripgrep` extension now explicitly prohibits `grep`, `egrep`, and `fgrep` in Bash pipelines, and its rejection guidance explains how to replace post-filtering with an `rg --glob` exclusion.
 - Delegated Pi processes now exclude the `subagent` tool. Only the top-level orchestrator can start agent attempts; subagents cannot create nested subagents.
 
 ## v1.3
