@@ -10,6 +10,7 @@ This log records notable functionality added to this configuration repository. V
 
 ### Changed
 
+- The `footer` extension's context segment now shows the used context size in tokens next to the percentage (for example `23.1k/1M`), using a `k` suffix below 1M and `M` from 1M up.
 - The `footer` extension now refreshes itself after compaction (manual `/compact` or automatic): the context segment shows the size of the rebuilt context (compaction summary plus kept messages) instead of the stale pre-compaction usage, and the tokens and cost segments reset to count only session activity since the latest compaction.
 - `/analyze-and-plan` now closes with explicit next steps: approve a clean plan by running `/implement-and-review` without arguments, answer open decisions with `/implement-and-review {decisions}`, or continue the analysis by re-running `/analyze-and-plan` with additional questions or new information. Planner results now echo the original task in a `## Task` section, so `/implement-and-review` no longer requires the task to be re-stated and treats any arguments as user decisions.
 

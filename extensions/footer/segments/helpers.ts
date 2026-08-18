@@ -9,6 +9,21 @@ export function formatTokens(n: number): string {
   return `${Math.round(n / 1000000)}M`;
 }
 
+/**
+ * Format a context size for the context-usage display. Uses the `k` suffix
+ * below 1M and switches to `M` from 1M up ("0.12k", "23.1k", "120k",
+ * "1.12M"); `M` is the largest suffix used.
+ */
+export function formatContextTokens(n: number): string {
+  if (n === 0) return "0";
+  const [value, suffix] = n < 1_000_000 ? [n / 1_000, "k"] : [n / 1_000_000, "M"];
+  return trimTrailingZeros(value.toFixed(2)) + suffix;
+}
+
+function trimTrailingZeros(s: string): string {
+  return s.replace(/\.?0+$/, "");
+}
+
 export function withIcon(icon: string, text: string): string {
   return icon ? `${icon} ${text}` : text;
 }

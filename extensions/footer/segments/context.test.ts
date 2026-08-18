@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getContextProgressColor } from "./context.ts";
+import type { SegmentContext } from "../types.ts";
+import { contextPctSegment, getContextProgressColor } from "./context.ts";
+
+const ctx = (overrides: Partial<SegmentContext>): SegmentContext => ({
+  contextPercent: 23.1,
+  contextTokens: 23_100,
+  contextWindow: 1_000_000,
+  options: {},
+  theme: { fg: (_color: unknown, text: string) => text } as SegmentContext["theme"],
+  ...overrides,
+} as SegmentContext);
+
+test("shows used context tokens next to the percentage", () => {
+  const rendered = contextPctSegment.render(ctx({}));
+  assert.equal(rendered.visible, true);
+  assert.ok(rendered.content.endsWith("23.1% 23.1k/1M"), rendered.content);
+});
+
+test("switches context sizes to the M suffix from 1M", () => {
+  const rendered = contextPctSegment.render(ctx({ contextPercent: 12, contextTokens: 120_000 }));
+  assert.ok(rendered.content.endsWith("12.0% 120k/1M"), rendered.content);
+});
 
 test("uses green progress below 100k context tokens", () => {
   assert.equal(getContextProgressColor(99_999), "success");
