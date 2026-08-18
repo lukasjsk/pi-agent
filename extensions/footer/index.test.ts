@@ -4,6 +4,10 @@ import { mock } from "bun:test";
 
 import type { ExtensionContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { mockPiCodingAgent } from "./pi-mock.ts";
+
+mockPiCodingAgent();
+
 const refreshedContexts: ExtensionContext[] = [];
 
 mock.module("@earendil-works/pi-tui", () => ({
@@ -48,6 +52,49 @@ test("refresh timer uses the active context after a model switch", async () => {
     await Promise.resolve();
 
     assert.deepEqual(refreshedContexts, [copilot]);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+});
+
+test("re-renders the footer after compaction", async () => {
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
+  const pi = {
+    on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => {
+      handlers.set(event, handler);
+    },
+  } as ExtensionAPI;
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (() => 0) as unknown as typeof setInterval;
+
+  try {
+    let footerSetup: unknown;
+    let renderRequested = 0;
+    const tui = { requestRender: () => { renderRequested += 1; } };
+    const footerData = {
+      onBranchChange: () => () => {},
+      getGitBranch: () => null,
+    };
+    const ctx = {
+      hasUI: true,
+      model: undefined,
+      ui: { setFooter: (setup: unknown) => { footerSetup = setup; } },
+      sessionManager: {
+        getBranch: () => [],
+        buildContextEntries: () => [],
+      },
+    } as unknown as ExtensionContext;
+
+    footer(pi);
+    await handlers.get("session_start")?.({}, ctx);
+    assert.equal(typeof footerSetup, "function", "footer should be registered for a UI session");
+
+    (footerSetup as (tui: unknown, theme: unknown, footerData: unknown) => unknown)?.(tui, {}, footerData);
+    assert.equal(renderRequested, 0);
+
+    // Both manual (/compact) and automatic compaction fire session_compact.
+    await handlers.get("session_compact")?.({ type: "session_compact", reason: "manual" }, ctx);
+    assert.equal(renderRequested, 1);
   } finally {
     globalThis.setInterval = originalSetInterval;
   }

@@ -1,9 +1,9 @@
-import type { ExtensionAPI, ReadonlyFooterDataProvider, Theme, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { sessionEntryToContextMessages, type ExtensionAPI, type ReadonlyFooterDataProvider, type Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
 
-import type { SegmentContext, StatusLineSegmentId, ProviderUsageStatistics, SessionEvent, ThinkingLevelEvent, AssistantMessageEvent, ToolResultEvent, UserBashEvent } from "./types.js";
+import type { SegmentContext, StatusLineSegmentId, ProviderUsageStatistics, SessionEvent, ThinkingLevelEvent, ToolResultEvent, UserBashEvent } from "./types.js";
+import { estimateCurrentContextTokens, postCompactionEntries } from "./compaction.js";
 import { renderSegment } from "./segments/index.js";
 import { getGitStatus, invalidateGitStatus, invalidateGitBranch } from "./git-status.js";
 import { getEffectiveConfig } from "./config.js";
@@ -131,6 +131,13 @@ export default function footer(pi: ExtensionAPI) {
     copilotRefreshTimer = undefined;
   });
 
+  // Compaction (manual /compact or automatic threshold/overflow) appends a compaction
+  // entry and rebuilds the active context. Re-render immediately so context size,
+  // token usage and cost reflect the compacted branch, regardless of the trigger.
+  pi.on("session_compact", () => {
+    tuiRef?.requestRender();
+  });
+
   // Invalidate git status on file changes
   pi.on("tool_result", async (event: ToolResultEvent, _ctx: ExtensionContext) => {
     if (event.toolName === "write" || event.toolName === "edit") {
@@ -167,31 +174,27 @@ export default function footer(pi: ExtensionAPI) {
     const effectiveConfig = getEffectiveConfig();
     const colors = effectiveConfig.colors ?? getDefaultColors();
 
-    const branch = (ctx.sessionManager?.getBranch?.() ?? []) as SessionEvent[];
-    const isAssistantMessageEvent = (e: SessionEvent): e is AssistantMessageEvent =>
-      e.type === "message" && (e as AssistantMessageEvent).message.role === "assistant";
-    const completedMessages = branch
-      .filter(isAssistantMessageEvent)
-      .map(e => e.message as AssistantMessage)
-      .filter(m => m.stopReason !== "error" && m.stopReason !== "aborted");
+    const branchEntries = ctx.sessionManager?.getBranch?.() ?? [];
+
+    // A compaction resets session stats: only entries after the latest compaction
+    // entry count toward token usage and cost.
+    const statEntries = postCompactionEntries(branchEntries);
 
     // Tool updates can replace an existing branch entry as a subagent chain progresses.
     // Recalculate on every render so a final step is never hidden by a stale length-based cache.
-    const { usageStats, subagentCosts } = calculateUsage(branch);
+    const { usageStats, subagentCosts } = calculateUsage(statEntries as SessionEvent[]);
 
     const isThinkingEvent = (e: SessionEvent): e is ThinkingLevelEvent =>
       e.type === "thinking_level_change";
-    const thinkingLevelFromSession = branch
+    const thinkingLevelFromSession = (branchEntries as SessionEvent[])
       .filter(isThinkingEvent)
       .reduce((_, e) => e.thinkingLevel ?? "off", "off");
 
-    const lastAssistant = completedMessages.at(-1);
-
-    // Calculate context percentage
-    const contextTokens = lastAssistant
-      ? lastAssistant.usage.input + lastAssistant.usage.output +
-        lastAssistant.usage.cacheRead + lastAssistant.usage.cacheWrite
-      : 0;
+    // Calculate context percentage. Compaction-aware: right after a compaction there is no
+    // post-compaction assistant usage yet, so the rebuilt context (summary + kept messages)
+    // is estimated instead of reusing the stale pre-compaction size.
+    const contextMessages = (ctx.sessionManager?.buildContextEntries?.() ?? []).flatMap(sessionEntryToContextMessages);
+    const contextTokens = estimateCurrentContextTokens(branchEntries, contextMessages);
     const contextWindow = ctx.model?.contextWindow || 0;
     const contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
 
