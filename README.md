@@ -1,6 +1,6 @@
 # Pi Agent Configuration
 
-Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains a bounded development workflow, two TypeScript extensions, and an interactive theme. Based on https://github.com/adrianapan/pikit.
+Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains a bounded development workflow, four TypeScript extensions, and an interactive theme. Based on https://github.com/adrianapan/pikit.
 
 ## Contents
 
@@ -10,6 +10,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | [`prompts/`](prompts) | `/analyze-and-plan` plans a task with explorer and planner agents; `/implement-and-review` executes an approved task and reviews it. |
 | [`extensions/subagent/`](extensions/subagent) | A `subagent` tool extension that runs isolated Pi processes in single, parallel, or chained modes, including agent discovery, model fallback, and automatic downstream handovers. |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
+| [`extensions/ask-user-question.ts`](extensions/ask-user-question.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
 
 ## Install

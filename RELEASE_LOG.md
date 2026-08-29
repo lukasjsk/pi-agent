@@ -6,6 +6,7 @@ This log records notable functionality added to this configuration repository. V
 
 ### Added
 
+- A new `ask-user-question` extension that registers an `ask_user_question` tool, letting the agent pause execution and ask the user a single question through Pi's interactive TUI. It supports free-form text input, single-select option lists, and multi-select checklists (`multiSelect: true`); whenever options are provided, an "Other" entry is always available for custom answers. Results carry structured details (status, question, mode, answers) with dedicated call and result rendering, and pop-up-style tools serialize through a shared UI mutex so overlapping TUI prompts cannot collide.
 - The `subagent` extension now creates a bounded handover for every completed agent attempt, stores it in the session’s tool-result details, and automatically supplies active-branch handovers to later subagents. The parent orchestrator can inspect the ledger with the new `handover` tool.
 
 ### Changed
