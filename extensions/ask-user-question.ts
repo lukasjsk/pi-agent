@@ -572,7 +572,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
         description:
             "Ask the user a single question and pause execution until they answer. Use this when requirements are ambiguous, user preferences are needed, a decision would materially affect implementation, or you need confirmation before proceeding. Ask exactly one question per tool call, and prefer multiple separate tool calls over bundling unrelated questions together.",
         promptSnippet:
-            "Use this tool to ask exactly one clarifying question, missing-requirement question, preference question, or decision question before continuing.",
+            "Use this tool to ask exactly one clarifying question, missing-requirement question, preference question, or decision question before continuing. Always use it when presenting the user with 2+ options or next-step choices.",
         promptGuidelines: [
             "Ask exactly one question per tool call.",
             "If you need answers to multiple questions, make multiple separate ask_user_question tool calls instead of combining them into one prompt.",
@@ -581,6 +581,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
             'If you recommend a specific option, make it the first option in the list and add "(Recommended)" at the end of the label.',
             "Prefer this tool over guessing when requirements, preferences, or implementation choices are unclear.",
             "Use this tool when multiple valid implementation paths exist and the preferred path depends on user choice.",
+            "Always render decision points and next-step choices (2+ valid paths) as options in this tool — never present them as prose in your reply, even when matching a conversational tone.",
         ],
         parameters: AskUserQuestionParams,
 
