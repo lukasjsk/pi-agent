@@ -1,6 +1,6 @@
 # Pi Agent Configuration
 
-Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains a bounded development workflow, four TypeScript extensions, and an interactive theme. Based on https://github.com/adrianapan/pikit.
+Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains a bounded development workflow, five TypeScript extensions, and an interactive theme. Based on https://github.com/adrianapan/pikit.
 
 ## Contents
 
@@ -11,6 +11,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | [`extensions/subagent/`](extensions/subagent) | A `subagent` tool extension that runs isolated Pi processes in single, parallel, or chained modes, including agent discovery, model fallback, automatic downstream handovers, and a bounded parent-session reference transcript. |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
 | [`extensions/ask-user-question.ts`](extensions/ask-user-question.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
+| [`extensions/compact-and-new-session/`](extensions/compact-and-new-session/) | A `/compact-and-new-session` command that compacts the current session and opens a child session with a visible summary handoff. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
 
 ## Install
@@ -65,6 +66,12 @@ Every completed subagent also records a bounded handover report. The extension a
 Each child also receives a bounded (36 KiB), compaction-aware transcript of the parent session's active conversation, built from Pi's rebuilt context so a compaction summary and retained messages are included. This lets `/analyze-and-plan` reason about the previous conversation, not just the prompt. Note that although children run with `--no-session`, this transcript does send parent conversation content to delegated child models.
 
 The workflow prompts use the `subagent` extension and user-level agent definitions, so install both `agents/`, `prompts/`, and `extensions/subagent/` to use it.
+
+## Compact and start a new session
+
+Run `/compact-and-new-session` from an idle session to generate Pi's compaction summary and continue in a new child session. The child-session relationship is recorded in Pi's session lineage; the conversation itself is carried forward only through the generated summary.
+
+After the switch, the command adds the summary as a labelled, visible custom extension handoff message. It is available to the new session as context, but is not a genuine assistant-role response and does not trigger an agent turn. If compaction fails or is cancelled, no replacement session is opened.
 
 ## Notes
 
