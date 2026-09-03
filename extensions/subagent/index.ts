@@ -26,6 +26,7 @@ import {
 	ModelRegistry,
 	getAgentDir,
 	getMarkdownTheme,
+	sessionEntryToContextMessages,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -36,6 +37,7 @@ import { buildChildPiArgs } from "./child-invocation.ts";
 import { formatChainStatus } from "./chain-status.ts";
 import { createHandover, type Handover, withHandoverContext } from "./handover.ts";
 import { normalizeSubagentArguments, type SubagentMode } from "./mode.ts";
+import { formatParentContext, withParentContext } from "./parent-context.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -339,6 +341,7 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 	handovers: Handover[],
+	parentContext: string,
 	modelCtx?: ModelFallbackCtx,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
@@ -436,7 +439,7 @@ async function runSingleAgent(
 				args.push("--append-system-prompt", tmpPromptPath);
 			}
 
-			args.push(`Task: ${withHandoverContext(task, handovers)}`);
+			args.push(`Task: ${withParentContext(withHandoverContext(task, handovers), parentContext)}`);
 			let wasAborted = false;
 
 			const exitCode = await new Promise<number>((resolve) => {
@@ -651,6 +654,11 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const priorHandovers = getPriorHandovers(ctx);
+			// buildContextEntries is branch- and compaction-aware: a compaction summary
+			// replaces pre-compaction messages before we format the child reference context.
+			const parentContext = formatParentContext(
+				ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages),
+			);
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
 			// Build model fallback context from parent session.
@@ -776,6 +784,7 @@ export default function (pi: ExtensionAPI) {
 						chainUpdate,
 						makeDetails("chain"),
 						chainHandovers,
+						parentContext,
 						modelCtx,
 					);
 					results.push(result);
@@ -858,6 +867,7 @@ export default function (pi: ExtensionAPI) {
 						},
 						makeDetails("parallel"),
 						priorHandovers,
+						parentContext,
 						modelCtx,
 					);
 					allResults[index] = result;
@@ -896,6 +906,7 @@ export default function (pi: ExtensionAPI) {
 					onUpdate,
 					makeDetails("single"),
 					priorHandovers,
+					parentContext,
 					modelCtx,
 				);
 				const isError = isFailedResult(result);

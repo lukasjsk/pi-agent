@@ -8,7 +8,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | --- | --- |
 | [`agents/`](agents) | User-level workflow agents: read-only `explorer`, approval-aware `planner`, `implementer`, and `reviewer`. |
 | [`prompts/`](prompts) | `/analyze-and-plan` plans a task with explorer and planner agents; `/implement-and-review` executes an approved task and reviews it. |
-| [`extensions/subagent/`](extensions/subagent) | A `subagent` tool extension that runs isolated Pi processes in single, parallel, or chained modes, including agent discovery, model fallback, and automatic downstream handovers. |
+| [`extensions/subagent/`](extensions/subagent) | A `subagent` tool extension that runs isolated Pi processes in single, parallel, or chained modes, including agent discovery, model fallback, automatic downstream handovers, and a bounded parent-session reference transcript. |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
 | [`extensions/ask-user-question.ts`](extensions/ask-user-question.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
@@ -61,6 +61,8 @@ Cancelled, unavailable, custom, or malformed question answers do not authorize f
 4. **Reviewer** checks relevant changes against the approved task and plan.
 
 Every completed subagent also records a bounded handover report. The extension automatically injects active-branch handovers into later child tasks, so implementers and reviewers receive explorer findings and approved-plan context without repeating reconnaissance. The top-level orchestrator can inspect prior reports with the `handover` tool.
+
+Each child also receives a bounded (36 KiB), compaction-aware transcript of the parent session's active conversation, built from Pi's rebuilt context so a compaction summary and retained messages are included. This lets `/analyze-and-plan` reason about the previous conversation, not just the prompt. Note that although children run with `--no-session`, this transcript does send parent conversation content to delegated child models.
 
 The workflow prompts use the `subagent` extension and user-level agent definitions, so install both `agents/`, `prompts/`, and `extensions/subagent/` to use it.
 

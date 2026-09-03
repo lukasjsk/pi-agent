@@ -10,6 +10,7 @@ Delegate tasks to specialized subagents with isolated context windows.
 - **Markdown rendering**: Final output rendered with proper formatting (expanded view)
 - **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
 - **Abort support**: Ctrl+C propagates to kill subagent processes
+- **Parent-session reference context**: Every child receives a bounded, compaction-aware transcript from the active parent-session branch
 - **Automatic handovers**: Every completed agent result is recorded and supplied to later agents on the active session branch
 
 ## Structure
@@ -83,6 +84,8 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 ```
 
 `{previous}` in a chain task is replaced with the immediately preceding **executed** chain step's final output. `{parent}` is replaced with the final output of the preceding `subagent` tool invocation in the current session. Use `{parent}` to carry an approved plan from a planning invocation into a later implementation chain.
+
+Every child also receives a bounded parent-session reference transcript before its handover ledger and assigned task. It is built from Pi's active, compaction-aware context: a compaction summary and retained post-compaction messages are included, while messages summarized by that compaction are not. The transcript is limited to 36 KiB, preserves the compaction summary when present, and then prioritizes newest messages with an omission marker. Although children still run with `--no-session`, this explicitly sends parent conversation content to their model; do not delegate sensitive conversation content to an untrusted child model.
 
 In addition, the extension automatically prepends a bounded handover ledger to every child task. It contains handovers from completed subagents on the active session branch and, in a chain, all prior executed steps. This prevents downstream agents from repeating reconnaissance just because a workflow omitted `{previous}`. Handovers are stored in the `subagent` tool-result details, so they survive reloads and follow session branches without creating project files. The parent/orchestrator can read the ledger with the `handover` tool (`latest` or `all`). Child agents cannot invoke either `subagent` or `handover`.
 
@@ -206,5 +209,6 @@ This lets you define one agent file across multiple machines with different Copi
 - Output truncated to last 10 items in collapsed view (expand to see all)
 - Parallel model-visible output is capped at 50 KB per task; full results remain in tool details
 - Agents discovered fresh on each invocation (allows editing mid-session)
+- Parent-session reference context is bounded to 36 KiB; it includes the canonical compaction summary when present and then newest active messages
 - Handover context is bounded to 36 KB total and 12 KB per report; the newest reports are retained first when the limit is reached
 - Parallel mode limited to 8 tasks, 4 concurrent
