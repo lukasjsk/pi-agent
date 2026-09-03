@@ -6,6 +6,7 @@ This log records notable functionality added to this configuration repository. V
 
 ### Added
 
+- `/analyze-and-plan` now handles ambiguous tasks through sequential top-level `ask_user_question` clarifications. Its final action can continue analysis, automatically run the implementation-and-review workflow, or create a resolved implementation-ready handoff for later `/implement-and-review` execution. Synthesized planner output records `## User decisions` and `## Final action`. The existing `{parent}` handoff preserves those resolved constraints.
 - A new `ask-user-question` extension that registers an `ask_user_question` tool, letting the agent pause execution and ask the user a single question through Pi's interactive TUI. It supports free-form text input, single-select option lists, and multi-select checklists (`multiSelect: true`); whenever options are provided, an "Other" entry is always available for custom answers. Results carry structured details (status, question, mode, answers) with dedicated call and result rendering, and pop-up-style tools serialize through a shared UI mutex so overlapping TUI prompts cannot collide.
 - The `subagent` extension now creates a bounded handover for every completed agent attempt, stores it in the session’s tool-result details, and automatically supplies active-branch handovers to later subagents. The parent orchestrator can inspect the ledger with the new `handover` tool.
 
@@ -14,7 +15,7 @@ This log records notable functionality added to this configuration repository. V
 - The `ask_user_question` extension's prompt guidance now instructs the agent to always use the tool when presenting two or more options or next-step choices, rendering decision points as interactive tool options rather than prose in its reply.
 - The `footer` extension's context segment now shows the used context size in tokens next to the percentage (for example `23.1k/1M`), using a `k` suffix below 1M and `M` from 1M up.
 - The `footer` extension now refreshes itself after compaction (manual `/compact` or automatic): the context segment shows the size of the rebuilt context (compaction summary plus kept messages) instead of the stale pre-compaction usage, and the tokens and cost segments reset to count only session activity since the latest compaction.
-- `/analyze-and-plan` now closes with explicit next steps: approve a clean plan by running `/implement-and-review` without arguments, answer open decisions with `/implement-and-review {decisions}`, or continue the analysis by re-running `/analyze-and-plan` with additional questions or new information. Planner results now echo the original task in a `## Task` section, so `/implement-and-review` no longer requires the task to be re-stated and treats any arguments as user decisions.
+- Planner results now include a structured clarification-question contract and, after synthesis, stable `## User decisions` and `## Final action` sections. `/implement-and-review` treats handed-off decisions as binding constraints, while still accepting command arguments as additional user decisions.
 
 ### Fixed
 

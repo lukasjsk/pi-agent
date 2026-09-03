@@ -47,12 +47,13 @@ Restart Pi after installing or changing extensions. Select the theme with Pi's t
 
 ## Development workflow
 
-Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. It stops for approval and closes with one of two statuses:
+Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. When the planner identifies user-answerable ambiguity, the top-level workflow asks each clarification sequentially through `ask_user_question`; questions requiring repository investigation remain for another analysis pass. After answers are collected, a final single-select question offers three actions:
 
-- `## READY_TO_IMPLEMENT` — no open questions; run `/implement-and-review` (no arguments) to execute the approved work.
-- `## REQUIRES_APPROVAL` — open decisions; answer them with `/implement-and-review {decisions}`, or continue the analysis with `/analyze-and-plan {additional questions or new information}` when further reconnaissance is needed.
+- **Continue analysis** — runs a scoped explorer/planner follow-up using the prior plan and collected answers, then asks only newly identified clarification questions.
+- **Proceed with implementation** — synthesizes the resolved plan and automatically runs the implementer → reviewer → conditional correction → re-review workflow.
+- **Create implementation-ready handoff** — synthesizes the resolved plan without changing files. Run `/implement-and-review` later to execute it.
 
-The approved plan is carried between the two commands automatically (the `subagent` extension's `{parent}` placeholder and handover reports), so the task does not need to be re-stated. The agents are intentionally scoped as follows:
+Cancelled, unavailable, custom, or malformed question answers do not authorize further analysis or implementation. The synthesized planner result records `## User decisions` and `## Final action`; these are carried to implementation through the `subagent` extension's `{parent}` placeholder and handover reports, so the task and resolved decisions do not need to be re-stated. The agents are intentionally scoped as follows:
 
 1. **Explorer** gathers concise implementation context without modifying files.
 2. **Planner** produces a minimal plan and marks material decisions with `## REQUIRES_APPROVAL`.
