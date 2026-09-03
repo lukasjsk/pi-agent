@@ -1,8 +1,8 @@
 # Release Log
 
-This log records notable functionality added to this configuration repository. Versions are maintained for reference only; no release artifacts are published.
+This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
-## Unreleased
+## 2026-09-03
 
 ### Added
 
@@ -23,28 +23,27 @@ This log records notable functionality added to this configuration repository. V
 - The `require-ripgrep` extension now explicitly prohibits `grep`, `egrep`, and `fgrep` in Bash pipelines, and its rejection guidance explains how to replace post-filtering with an `rg --glob` exclusion.
 - Delegated Pi processes now exclude the `subagent` tool. Only the top-level orchestrator can start agent attempts; subagents cannot create nested subagents.
 
-## v1.3
+### Enhanced
+
+- The `require-ripgrep` extension now appends a dedicated `## Bash search` section to the system prompt on every turn, so the ripgrep-only rule and `rg` flag semantics (pattern flag is `-e`; `-E` is encoding, not extended regex) are visible even before the model reaches for `grep`. Its detector also recognizes `grep`/`egrep`/`fgrep` in command-substitution and interpreter positions — `$(…)`, backticks, `xargs`, and `bash -c` strings — and its block guidance now includes the `rg` flag differences.
+
+## 2026-07-27
 
 ### Fixed
 
 - The `subagent` extension now requires an explicit invocation mode (`single`, `parallel`, or `chain`) and discards stale fields from other modes before validation. This prevents chained workflows such as `/analyze-and-plan` from failing when a provider retains fields from an earlier single or parallel tool-call shape.
 
-## v1.2
+## 2026-07-24
 
 ### Added
 
 - A global `require-ripgrep` Pi extension that overrides the search tool metadata to advertise its ripgrep (`rg`) implementation and blocks direct `grep`, `egrep`, and `fgrep` invocations through Pi's `bash` tool, returning an actionable `rg` replacement message.
 
-## v1.1
+## 2026-07-23
 
 ### Added
 
 - The footer cost breakdown now shows the top-level orchestrator's cost first as `O:$…`, followed by the costs of any workflow subagents.
-
-## v1
-
-### Added
-
 - A reusable Pi agent configuration collection with installation instructions for agents, extensions, prompts, and themes.
 - A bounded development workflow with `explorer`, `planner`, `implementer`, and `reviewer` agents, plus planning and implementation/review prompt templates.
 - A `subagent` extension for isolated delegated Pi processes, supporting single-agent, parallel, and chained execution; live progress; usage reporting; cancellation; configurable agent scopes; and model fallback.

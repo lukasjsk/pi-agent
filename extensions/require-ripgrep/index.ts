@@ -26,6 +26,17 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
+  // Tool-level guidelines alone are not strong enough: the model still reaches
+  // for grep in bash. Append an explicit, always-visible section to the system
+  // prompt so the ripgrep-only rule and the rg flag semantics (where GNU grep's
+  // familiar -E means "extended" but rg's -E means "encoding") are front of mind.
+  pi.on("before_agent_start", (event) => {
+    if (event.systemPrompt.includes(RIPGREP_SYSTEM_PROMPT_SECTION)) return {};
+    return {
+      systemPrompt: event.systemPrompt + RIPGREP_SYSTEM_PROMPT_SECTION,
+    };
+  });
+
   // `tool_call` runs after preflight but before the built-in bash tool executes.
   // Returning { block: true } makes Pi skip execution and gives the model a
   // readable corrective result it can act on in its next turn.
@@ -36,3 +47,10 @@ export default function (pi: ExtensionAPI) {
     }
   });
 }
+
+const RIPGREP_SYSTEM_PROMPT_SECTION =
+  "\n\n## Bash search\n" +
+  "In bash, never run `grep`, `egrep`, or `fgrep` (including inside `$()`, backticks, after `xargs`, or in `bash -c` strings); calls to them are blocked. " +
+  "Use the grep tool or `rg` (ripgrep) for content searches instead. " +
+  "`rg` flag differences from GNU grep: the pattern flag is `-e` (not `-E`; `-E` selects the encoding), `-F` means fixed string, " +
+  "use `--line-number` for line numbers and `--color=never` for plain output, and express file or path exclusions with `--glob '!directory/**'` rather than piping into `grep -v`.";
