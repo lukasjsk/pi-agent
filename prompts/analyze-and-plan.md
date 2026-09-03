@@ -11,17 +11,27 @@ Start by using the `subagent` tool with `mode: "chain"` and `agentScope: "user"`
 
 If this invocation continues an earlier analysis in this session, do not start over. Direct the explorer to investigate the new questions within the earlier scope. Direct the planner to use the original task, the earlier planner result, and the new input to update the plan and re-evaluate approval status.
 
-After each successful planner result, inspect its `## Clarification questions` section. For every ordered question marked `**Requires investigation:** no`, call `ask_user_question` separately, translating its Question, Details, Mode, and Options exactly to the tool parameters. Preserve each complete structured result in order. Do not ask questions marked `**Requires investigation:** yes` through the UI.
+After each successful planner result, first reproduce the complete planner result verbatim as a normal assistant response so the user can see the proposed plan and any clarification context. Only then inspect its `## Clarification questions` section. For every ordered question marked `**Requires investigation:** no`, call `ask_user_question` separately, translating its Question, Details, Mode, and Options exactly to the tool parameters. Preserve each complete structured result in order. Do not ask questions marked `**Requires investigation:** yes` through the UI.
 
 If a clarification call is cancelled, unavailable, malformed, or does not yield a usable answer, stop. State that planning stopped without approval, synthesis, or implementation. Never infer an answer.
 
-After all direct-answer clarification questions have been answered, ask this final question through one `ask_user_question` single-select call:
+After all direct-answer clarification questions have been answered, inspect the latest planner result's leading status before asking the final `ask_user_question` single-select call. If it begins with `## READY_TO_IMPLEMENT`, ask:
 
 ```text
-Question: What should happen next?
+Question: Ready to proceed with implementation?
 Details: Your answers will be recorded in the planning handoff.
 Options:
-- Continue analysis | continue-analysis | Investigate remaining questions and update the plan.
+- Proceed with implementation | proceed-implementation | Create the resolved plan, then automatically implement and review it.
+- Create implementation-ready handoff | create-handoff | Create the resolved plan without changing files; implementation can run later.
+```
+
+For `## REQUIRES_APPROVAL` or any other non-ready result, ask:
+
+```text
+Question: Ready to proceed with implementation?
+Details: Your answers will be recorded in the planning handoff.
+Options:
+- No, analyse with new information | continue-analysis | Investigate remaining questions and update the plan.
 - Proceed with implementation | proceed-implementation | Create the resolved plan, then automatically implement and review it.
 - Create implementation-ready handoff | create-handoff | Create the resolved plan without changing files; implementation can run later.
 ```

@@ -48,11 +48,13 @@ Restart Pi after installing or changing extensions. Select the theme with Pi's t
 
 ## Development workflow
 
-Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. When the planner identifies user-answerable ambiguity, the top-level workflow asks each clarification sequentially through `ask_user_question`; questions requiring repository investigation remain for another analysis pass. After answers are collected, a final single-select question offers three actions:
+Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. After each successful planner result, the workflow first reproduces the complete plan verbatim in the conversation, so the proposed plan is visible before anything is answered. When the planner identifies user-answerable ambiguity, the top-level workflow then asks each clarification sequentially through `ask_user_question`; questions requiring repository investigation remain for another analysis pass. After answers are collected, a final single-select question — `Ready to proceed with implementation?` — offers these actions:
 
-- **Continue analysis** — runs a scoped explorer/planner follow-up using the prior plan and collected answers, then asks only newly identified clarification questions.
+- **No, analyse with new information** — shown only when the plan is not ready for implementation; runs a scoped explorer/planner follow-up using the prior plan and collected answers, then asks only newly identified clarification questions.
 - **Proceed with implementation** — synthesizes the resolved plan and automatically runs the implementer → reviewer → conditional correction → re-review workflow.
 - **Create implementation-ready handoff** — synthesizes the resolved plan without changing files. Run `/implement-and-review` later to execute it.
+
+A ready-to-implement plan omits the analysis action, since re-analyzing without new information would not change the plan.
 
 Cancelled, unavailable, custom, or malformed question answers do not authorize further analysis or implementation. The synthesized planner result records `## User decisions` and `## Final action`; these are carried to implementation through the `subagent` extension's `{parent}` placeholder and handover reports, so the task and resolved decisions do not need to be re-stated. The agents are intentionally scoped as follows:
 

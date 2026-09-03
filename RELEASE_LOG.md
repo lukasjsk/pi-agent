@@ -17,6 +17,8 @@ This log records notable functionality added to this configuration repository. S
 - The `footer` extension's context segment now shows the used context size in tokens next to the percentage (for example `23.1k/1M`), using a `k` suffix below 1M and `M` from 1M up.
 - The `footer` extension now refreshes itself after compaction (manual `/compact` or automatic): the context segment shows the size of the rebuilt context (compaction summary plus kept messages) instead of the stale pre-compaction usage, and the tokens and cost segments reset to count only session activity since the latest compaction.
 - Planner results now include a structured clarification-question contract and, after synthesis, stable `## User decisions` and `## Final action` sections. `/implement-and-review` treats handed-off decisions as binding constraints, while still accepting command arguments as additional user decisions.
+- `/analyze-and-plan` now reproduces the complete planner result verbatim in the conversation before asking clarification or final-action questions, so the proposed plan is visible before anything is answered.
+- The `/analyze-and-plan` final-action question now reads `Ready to proceed with implementation?`. Ready-to-implement plans omit the analysis action, and the follow-up option for non-ready plans is labelled `No, analyse with new information`.
 
 ### Fixed
 
