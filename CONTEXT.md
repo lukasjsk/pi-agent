@@ -30,6 +30,10 @@ The variant of the subagent tool injected into a worker session that can spawn o
 **Spawn depth**:
 How many subagent levels nest below the orchestrator. Capped at 1: orchestrator → worker → scout.
 
+**Agent definition**:
+A user-editable markdown file (YAML frontmatter + body) that defines a spawnable subagent role: config fields in frontmatter, the system prompt in the body. Bundled worker/scout defaults live in the extension; user-level files override by name.
+_Avoid_: agent config, agent spec
+
 **Handover**:
 The passing of context and results between the orchestrator and its subagents, and between subagents via the orchestrator.
 _Avoid_: ledger, transcript sharing, context dump
