@@ -1,3 +1,8 @@
+> **Deprecated.** This extension is no longer installed by the install script. It has been
+> moved to `deprecated/extensions/subagent/` and will be replaced by the new configurable
+> `subagent` extension tracked in [`PLANNED_FEATURES.md`](../../../PLANNED_FEATURES.md). See
+> [`DEPRECATED.md`](../../DEPRECATED.md) for details.
+
 # Subagent Example
 
 Delegate tasks to specialized subagents with isolated context windows.

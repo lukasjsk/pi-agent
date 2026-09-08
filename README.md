@@ -1,18 +1,16 @@
 # Pi Agent Configuration
 
-Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains a bounded development workflow, five TypeScript extensions, and an interactive theme. Based on https://github.com/adrianapan/pikit.
+Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), the coding agent. The repository contains TypeScript extensions and an interactive theme. Based on https://github.com/adrianapan/pikit.
 
 ## Contents
 
 | Path | Purpose |
 | --- | --- |
-| [`agents/`](agents) | User-level workflow agents: read-only `explorer`, approval-aware `planner`, `implementer`, and `reviewer`. |
-| [`prompts/`](prompts) | `/analyze-and-plan` plans a task with explorer and planner agents; `/implement-and-review` executes an approved task and reviews it. |
-| [`extensions/subagent/`](extensions/subagent) | A `subagent` tool extension that runs isolated Pi processes in single, parallel, or chained modes, including agent discovery, model fallback, automatic downstream handovers, and a bounded parent-session reference transcript. |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
 | [`extensions/ask-user-question.ts`](extensions/ask-user-question.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
-| [`extensions/compact-and-new-session/`](extensions/compact-and-new-session/) | A `/compact-and-new-session` command that compacts the current session and opens a child session with a visible summary handoff. |
+| [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
+| [`deprecated/`](deprecated) | Deprecated resources (agents, subagent extension, compact-and-new-session extension, and the analyze-and-plan / implement-and-review prompts), preserved for reference. See [`deprecated/DEPRECATED.md`](deprecated/DEPRECATED.md). |
 
 ## Install
 
@@ -46,39 +44,21 @@ done
 
 Restart Pi after installing or changing extensions. Select the theme with Pi's theme picker.
 
-## Development workflow
+## Deprecated workflow
 
-Run `/analyze-and-plan <task>` to delegate read-only reconnaissance and planning. After each successful planner result, the workflow first reproduces the complete plan verbatim in the conversation, so the proposed plan is visible before anything is answered. When the planner identifies user-answerable ambiguity, the top-level workflow then asks each clarification sequentially through `ask_user_question`; questions requiring repository investigation remain for another analysis pass. After answers are collected, a final single-select question — `Ready to proceed with implementation?` — offers these actions:
+The previous bounded development workflow — the `/analyze-and-plan` and `/implement-and-review`
+prompts, the top-level `agents/` (`explorer`, `planner`, `implementer`, `reviewer`), the
+`subagent` extension, and the `/compact-and-new-session` extension — has been **deprecated** and
+moved to [`deprecated/`](deprecated/DEPRECATED.md). They are no longer installed by the install
+script above.
 
-- **No, analyse with new information** — shown only when the plan is not ready for implementation; runs a scoped explorer/planner follow-up using the prior plan and collected answers, then asks only newly identified clarification questions.
-- **Proceed with implementation** — synthesizes the resolved plan and automatically runs the implementer → reviewer → conditional correction → re-review workflow.
-- **Create implementation-ready handoff** — synthesizes the resolved plan without changing files. Run `/implement-and-review` later to execute it.
-
-A ready-to-implement plan omits the analysis action, since re-analyzing without new information would not change the plan.
-
-Cancelled, unavailable, custom, or malformed question answers do not authorize further analysis or implementation. The synthesized planner result records `## User decisions` and `## Final action`; these are carried to implementation through the `subagent` extension's `{parent}` placeholder and handover reports, so the task and resolved decisions do not need to be re-stated. The agents are intentionally scoped as follows:
-
-1. **Explorer** gathers concise implementation context without modifying files.
-2. **Planner** produces a minimal plan and marks material decisions with `## REQUIRES_APPROVAL`.
-3. **Implementer** carries out only the approved plan and runs focused verification.
-4. **Reviewer** checks relevant changes against the approved task and plan.
-
-Every completed subagent also records a bounded handover report. The extension automatically injects active-branch handovers into later child tasks, so implementers and reviewers receive explorer findings and approved-plan context without repeating reconnaissance. The top-level orchestrator can inspect prior reports with the `handover` tool.
-
-Each child also receives a bounded (36 KiB), compaction-aware transcript of the parent session's active conversation, built from Pi's rebuilt context so a compaction summary and retained messages are included. This lets `/analyze-and-plan` reason about the previous conversation, not just the prompt. Note that although children run with `--no-session`, this transcript does send parent conversation content to delegated child models.
-
-The workflow prompts use the `subagent` extension and user-level agent definitions, so install both `agents/`, `prompts/`, and `extensions/subagent/` to use it.
-
-## Compact and start a new session
-
-Run `/compact-and-new-session` from an idle session to generate Pi's compaction summary and continue in a new child session. The child-session relationship is recorded in Pi's session lineage; the conversation itself is carried forward only through the generated summary.
-
-After the switch, the command adds the summary as a labelled, visible custom extension handoff message. It is available to the new session as context, but is not a genuine assistant-role response and does not trigger an agent turn. If compaction fails or is cancelled, no replacement session is opened.
+Replacement work (a new configurable `subagent` extension with `worker`, `scout`, and
+`researcher` subagents, plus new `/analyze-and-plan` and `/implement-and-review` prompts built on
+it) is tracked in [`PLANNED_FEATURES.md`](PLANNED_FEATURES.md).
 
 ## Notes
 
 - The footer extension is self-contained TypeScript but expects Pi's extension runtime packages; it is not a standalone Node package.
-- `extensions/subagent/README.md` documents the extension's modes, security model, agent format, and fallback behavior in depth.
 - Review agent prompts and extension code before installing them into a shared or untrusted environment.
 
 ## License

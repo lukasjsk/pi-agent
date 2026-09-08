@@ -1,4 +1,23 @@
-Features planned for the future:
+## Planned features
 
-- create a /compact-and-new-session. Sometimes after large clarification or more complex scenario, we might want to create a summary and start new session with it.
-- play sound on finished job when waiting for user input.
+- deprecate "agents", "subagent" extension, "compact-and-new-session" extension and both prompts in "prompts" directory
+- create new subagents extension, that will have 3 subagents - this needs to be thoroughly thought through (using wayfinder or grill-me skills):
+  - worker (general subagent, that will do work) and will leverage different skills based on the type of work it is asked to do
+  - scout - subagent that will do exploration of task. Worker, or top level agent (orchestrator) will be able to spawn this subagent.
+  - researcher - not needed for now, but in the future it will work in similar way as scout, but instead of exploring current workspace, is will do a research over internet using firewrawl tools
+- needed to clarify:
+  - how to do handovers
+  - how orchestrator will decide and restrict implementation without plan
+  - how summaries and questions are presented to the user
+  - how implementation-review loops will be restricted
+  - how questions will be presented to the user (different options and open ended questions)
+  - ability to save result from the planner for later implementation (for example if there is some business clarification still needed)
+- make subagents configurable:
+  - be able to select what model to use (with fallback)
+  - be able to select thinking level (with fallback to default)
+  - be able to select tools agent is able to use
+- create new /analyze-and-plan and /implement-and-review prompts, but using new subagents
+- integrate workflow with Jira - to be able to read the stories/bugs/tasks as part initial context
+- integrate workflow with Confluence - to be able to read documents as part of intial context
+- researcher might have access to confluence and jira to search for similar stories
+- scout should be able to explore also git history for the files to get additional context (needs some effective implementation that would not burn through the tokens)
