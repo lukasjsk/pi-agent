@@ -38,6 +38,10 @@ _Avoid_: agent config, agent spec
 The ordered `model` list in an agent definition. At spawn the first entry with valid auth is used; on a runtime failure the task transparently moves to the next entry; exhausting the list fails the spawn with diagnostics. A per-spawn model override replaces the list entirely.
 _Avoid_: model chain, retry policy, auto-downgrade
 
+**Overflow report**:
+A subagent result too large for the orchestrator's context. The in-context tool result is capped; the full report is written to a session-scoped temp file whose path is referenced in the tool result for the orchestrator to read.
+_Avoid_: file dump, attachment
+
 **Handover**:
 The passing of context and results between the orchestrator and its subagents, and between subagents via the orchestrator.
 _Avoid_: ledger, transcript sharing, context dump
