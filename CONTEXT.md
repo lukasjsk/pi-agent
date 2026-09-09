@@ -47,5 +47,5 @@ The passing of context and results between the orchestrator and its subagents, a
 _Avoid_: ledger, transcript sharing, context dump
 
 **Structured output**:
-The final report every subagent must produce: its result, open questions for the user, and decision points the orchestrator must relay.
-_Avoid_: summary, report format
+The final report every subagent must produce: a role-specific markdown `result` plus a fenced JSON footer with `openQuestions[]`, `decisionPoints[]`, and `filesTouched[]`. The extension parses the footer; on parse failure the report degrades to plain `result` with a warning, never failing the child for format. Extension-appended provenance (model used, requested vs effective thinking level, fallback diagnostics) rides alongside.
+_Avoid_: summary, report format, JSON schema output
