@@ -11,6 +11,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
 import { runSubagent, type SubagentResult } from "./spawn.ts";
+import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to spawn." }),
@@ -30,6 +31,35 @@ export interface SubagentDeps {
 	getModel: () => unknown; // parent's current model (platform Model); unknown in tests
 	cwd: string;
 	agentDir: string;
+}
+
+/** Compose the tool result text: markdown body, structured fields, then extension-appended provenance. */
+export function renderResultText(result: SubagentResult): string {
+	const header = result.status === "completed" ? "" : `[${result.status}] `;
+	const parts: string[] = [];
+	const body = result.report || "(subagent returned no report text)";
+	parts.push(`${header}${body}`);
+
+	const fields = renderStructuredFields(result.footer);
+	if (fields) parts.push(fields);
+
+	const provenance: string[] = [];
+	if (result.modelUsed) provenance.push(`model: ${result.modelUsed}`);
+	if (result.requestedThinkingLevel || result.effectiveThinkingLevel) {
+		const requested = result.requestedThinkingLevel ?? "(none)";
+		const effective = result.effectiveThinkingLevel ?? "(unknown)";
+		provenance.push(`thinking level: requested ${requested}, effective ${effective}`);
+	}
+	if (provenance.length > 0) {
+		parts.push(`Provenance (extension-appended):
+${provenance.map((p) => `- ${p}`).join("\n")}`);
+	}
+
+	if (result.diagnostics.length > 0) {
+		parts.push(`Diagnostics:
+${result.diagnostics.map((d) => `- ${d}`).join("\n")}`);
+	}
+	return parts.join("\n\n");
 }
 
 /** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O). */
@@ -58,11 +88,7 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 				: undefined,
 		});
 
-		const header = result.status === "completed" ? "" : `[${result.status}] `;
-		const diagnostics = result.diagnostics.length
-			? `\n\nDiagnostics:\n${result.diagnostics.map((d) => `- ${d}`).join("\n")}`
-			: "";
-		const text = `${header}${result.report || "(subagent returned no report text)"}${diagnostics}`;
+		const text = renderResultText(result);
 		return { content: [{ type: "text", text }], details: { status: result.status, ...result } };
 	};
 }

@@ -97,6 +97,51 @@ test("a failed child surfaces status and diagnostics in the result", async () =>
 	assert.match(result.content[0].text, /kaboom/);
 });
 
+test("a well-formed child report renders markdown body, structured fields, and provenance", async () => {
+	const report = [
+		"## Start Here",
+		"README.md",
+		"```json",
+		'{ "openQuestions": [{ "question": "Auth scope?", "whyItMatters": "Blocks worker." }],',
+		'  "decisionPoints": [{ "decision": "Read tests too", "rationale": "They pin behavior." }],',
+		'  "filesTouched": ["src/a.ts"] }',
+		"```",
+	].join("\n");
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: report }] }],
+			thinkingLevel: "low",
+		}),
+	});
+
+	const execute = createSubagentExecutor(deps);
+	const result = await execute({ agent: "scout", task: "Recon." }, undefined, undefined);
+	const text = result.content[0].text;
+
+	assert.match(text, /^## Start Here\nREADME\.md$/m, "markdown body first");
+	assert.ok(!/```json/.test(text), "raw footer JSON is not double-reported");
+	assert.match(text, /Open questions:\n- Auth scope\? — Blocks worker\./);
+	assert.match(text, /Decision points:\n- Read tests too — They pin behavior\./);
+	assert.match(text, /Files touched: src\/a\.ts/);
+	assert.match(text, /Provenance \(extension-appended\):\n- model: test-provider\/test-model/);
+	assert.match(text, /- thinking level: requested \(none\), effective low/);
+});
+
+test("a degraded footer keeps status completed and warns in diagnostics", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "body\n```json\n{bad}\n```" }] }],
+		}),
+	});
+
+	const execute = createSubagentExecutor(deps);
+	const result = await execute({ agent: "scout", task: "x" }, undefined, undefined);
+
+	assert.equal(result.details.status, "completed");
+	assert.match(result.content[0].text, /\[?completed|body/);
+	assert.match(result.content[0].text, /Diagnostics:\n- unparseable JSON footer/);
+});
+
 test("the session_start handler registers the subagent tool with a description built from discovery", async () => {
 	const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
 	const registered: Array<Record<string, unknown>> = [];

@@ -64,7 +64,78 @@ test("assembles an isolated in-process child per the spec's isolation rules", as
 	assert.equal(result.status, "completed");
 	assert.equal(result.report, "## Files Retrieved\n- a.ts:1-2");
 	assert.equal(result.modelUsed, "test-provider/test-model");
+	assert.deepEqual(
+		result.diagnostics.filter((d) => !/footer/.test(d)),
+		[],
+		"no diagnostics beyond the missing-footer warning",
+	);
+});
+
+test("a well-formed footer is parsed into typed fields and stripped from the report", async () => {
+	const report = [
+		"## Key Code",
+		"- `a.ts:1-2` — entry point",
+		"```json",
+		'{ "openQuestions": [{ "question": "Q?", "whyItMatters": "W." }],',
+		'  "decisionPoints": [{ "decision": "D", "rationale": "R" }],',
+		'  "filesTouched": ["src/a.ts"] }',
+		"```",
+	].join("\n");
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: report }] }],
+		}),
+	});
+
+	const result = await runSubagent(baseOptions);
+
+	assert.equal(result.status, "completed");
+	assert.equal(result.report, "## Key Code\n- `a.ts:1-2` — entry point");
+	assert.deepEqual(result.footer.openQuestions, [{ question: "Q?", whyItMatters: "W." }]);
+	assert.deepEqual(result.footer.filesTouched, ["src/a.ts"]);
 	assert.deepEqual(result.diagnostics, []);
+});
+
+test("an unparseable footer degrades to plain result with a warning; status stays completed", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "body\n```json\n{oops}\n```" }] }],
+		}),
+	});
+
+	const result = await runSubagent(baseOptions);
+
+	assert.equal(result.status, "completed");
+	assert.match(result.report, /\{oops\}/);
+	assert.deepEqual(result.footer, { openQuestions: [], decisionPoints: [], filesTouched: [] });
+	assert.ok(result.diagnostics.some((d) => /unparseable JSON footer/.test(d)));
+});
+
+test("a missing footer degrades with a warning", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "plain report" }] }],
+		}),
+	});
+
+	const result = await runSubagent(baseOptions);
+
+	assert.equal(result.status, "completed");
+	assert.equal(result.report, "plain report");
+	assert.ok(result.diagnostics.some((d) => /no JSON footer/.test(d)));
+});
+
+test("provenance records requested vs effective thinking level, extension-collected", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession({ thinkingLevel: "off" }) }; // clamped: model cannot think
+	};
+
+	const result = await runSubagent({ ...baseOptions, definition: { ...scout, thinkingLevel: "high" } });
+
+	assert.equal(result.requestedThinkingLevel, "high");
+	assert.equal(result.effectiveThinkingLevel, "off");
 });
 
 test("passes the requested model through to the child", async () => {
@@ -104,9 +175,16 @@ test("definition warnings ride the spawn's diagnostics", async () => {
 	platformHooks.createAgentSession = async () => ({ session: fakeSession() });
 	const warned = { ...scout, warnings: ["/x/scout.md: unknown frontmatter field \"foo\" ignored"] };
 	const result = await runSubagent(baseOptions);
-	assert.deepEqual(result.diagnostics, []); // clean definition: no diagnostics
+	assert.deepEqual(
+		result.diagnostics.filter((d) => !/footer/.test(d)),
+		[],
+		"clean definition: no diagnostics beyond the missing-footer warning",
+	);
 	const result2 = await runSubagent({ ...baseOptions, definition: warned });
-	assert.deepEqual(result2.diagnostics, warned.warnings);
+	assert.deepEqual(
+		result2.diagnostics.filter((d) => !/footer/.test(d)),
+		warned.warnings,
+	);
 });
 
 test("relays child activity as progress", async () => {

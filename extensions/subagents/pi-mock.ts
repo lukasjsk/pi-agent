@@ -8,6 +8,7 @@ import { mock } from "bun:test";
 
 export interface FakeSession {
 	model: { provider: string; id: string } | undefined;
+	thinkingLevel?: string;
 	messages: unknown[];
 	agent: { state: { errorMessage?: string } };
 	aborted: boolean;
@@ -23,6 +24,7 @@ export interface FakeSession {
 export interface FakeSessionConfig {
 	messages?: unknown[];
 	model?: { provider: string; id: string } | undefined;
+	thinkingLevel?: string;
 	errorMessage?: string;
 	prompt?: (session: FakeSession) => Promise<void>;
 }
@@ -31,6 +33,7 @@ export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 	const listeners = new Set<(event: any) => void>();
 	const session: any = {
 		model: config.model ?? { provider: "test-provider", id: "test-model" },
+		thinkingLevel: config.thinkingLevel,
 		messages: config.messages ?? [],
 		agent: { state: { errorMessage: config.errorMessage } },
 		aborted: false,

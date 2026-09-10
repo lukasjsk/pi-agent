@@ -16,7 +16,8 @@ import {
 	SessionManager,
 	type Model,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentDefinition } from "./definitions.ts";
+import type { AgentDefinition, AgentThinkingLevel } from "./definitions.ts";
+import { parseStructuredReport, type StructuredFooter } from "./report.ts";
 
 export type SubagentStatus = "completed" | "failed" | "cancelled";
 
@@ -24,9 +25,15 @@ export interface SubagentResult {
 	status: SubagentStatus;
 	/** The child's final report text (partial on cancel, streamed-so-far on failure). */
 	report: string;
+	/** Parsed structured-output footer (§R7); empty fields on degradation. */
+	footer: StructuredFooter;
 	diagnostics: string[];
 	/** model actually used, "provider/id" — provenance is extension-collected, never child-authored. */
 	modelUsed?: string;
+	/** Requested thinking level (definition or per-spawn override), if one was set. */
+	requestedThinkingLevel?: AgentThinkingLevel;
+	/** Effective level after the platform's clamp to model capabilities, if the child session reports it. */
+	effectiveThinkingLevel?: string;
 }
 
 export interface SpawnRunOptions {
@@ -127,22 +134,42 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 			diagnostics.push("cancelled before completion; partial report returned");
 		}
 		const modelUsed = session.model ? `${session.model.provider}/${session.model.id}` : undefined;
-		const report = extractFinalText(session) || streamed;
+		const rawReport = extractFinalText(session) || streamed;
+		// Structured output contract (§R7): parse the footer off the report; degradation is a
+		// warning in diagnostics — a child is never failed for format alone.
+		const parsed = parseStructuredReport(rawReport);
+		if (parsed.warning) diagnostics.push(parsed.warning);
 		const status: SubagentStatus = aborted ? "cancelled" : errorMessage ? "failed" : "completed";
-		return { status, report, diagnostics, modelUsed };
+		return {
+			status,
+			report: parsed.result,
+			footer: parsed.footer,
+			diagnostics,
+			modelUsed,
+			requestedThinkingLevel: definition.thinkingLevel,
+			effectiveThinkingLevel: effectiveThinkingLevel(session),
+		};
 	} catch (error) {
 		diagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
 		return {
 			status: "failed",
 			report: streamed,
+			footer: { openQuestions: [], decisionPoints: [], filesTouched: [] },
 			diagnostics,
 			modelUsed: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
+			requestedThinkingLevel: definition.thinkingLevel,
+			effectiveThinkingLevel: effectiveThinkingLevel(session),
 		};
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 		unsubscribe();
 		session.dispose();
 	}
+}
+
+/** The session's thinking level is post-clamp (effective); absent on mocked/partial sessions. */
+function effectiveThinkingLevel(session: { thinkingLevel?: unknown }): string | undefined {
+	return typeof session.thinkingLevel === "string" ? session.thinkingLevel : undefined;
 }
 
 /** The last assistant message with non-empty text is the child's report. */

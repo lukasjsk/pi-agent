@@ -27,3 +27,22 @@ How the pieces connect: who calls whom, where data flows, what the load-bearing 
 
 ## Start Here
 The single file the caller should open first, and why.
+
+Structured output (mandatory):
+
+End your report with a fenced JSON footer exactly in this shape, after the last markdown section:
+
+```json
+{
+  "openQuestions": [{ "question": "…", "whyItMatters": "…" }],
+  "decisionPoints": [{ "decision": "…", "rationale": "…" }],
+  "filesTouched": ["path/to/file.ts"]
+}
+```
+
+- `openQuestions` — things only the caller can decide; use `[]` when none.
+- `decisionPoints` — judgment calls you made (e.g. which seams matter, what you excluded) with the why; use `[]` when none.
+- `filesTouched` — files you read that matter to the caller (you never modify files); use `[]` when none.
+- Short strings only — all code stays in the markdown body, unescaped. Omit empty arrays rather than padding them.
+
+Never include provenance (model used, thinking level, timings, token counts) anywhere in your report — the caller appends that itself. It is not yours to report.

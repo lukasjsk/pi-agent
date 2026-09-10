@@ -24,3 +24,22 @@ What was done, concretely.
 
 ## Notes
 Anything the caller must know: blockers, follow-ups, decisions you made, questions.
+
+Structured output (mandatory):
+
+End your report with a fenced JSON footer exactly in this shape, after the last markdown section:
+
+```json
+{
+  "openQuestions": [{ "question": "…", "whyItMatters": "…" }],
+  "decisionPoints": [{ "decision": "…", "rationale": "…" }],
+  "filesTouched": ["path/to/file.ts"]
+}
+```
+
+- `openQuestions` — things only the caller can decide; use `[]` when none.
+- `decisionPoints` — judgment calls you made, including any skill you loaded and why, with the why; use `[]` when none.
+- `filesTouched` — every file you created, edited, or wrote; use `[]` when none.
+- Short strings only — all code stays in the markdown body, unescaped. Omit empty arrays rather than padding them.
+
+Never include provenance (model used, thinking level, timings, token counts) anywhere in your report — the caller appends that itself. It is not yours to report.
