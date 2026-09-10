@@ -18,7 +18,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
-import { runSubagent, type SubagentResult } from "./spawn.ts";
+import { runSubagent, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
@@ -56,7 +56,15 @@ const SubagentParams = Type.Object({
 });
 
 export type SubagentToolDetails =
-	| { status: "running"; progress: string }
+	| {
+			status: "running";
+			progress: string;
+			/** Live activity relay (CONTEXT.md "Tool-call summary" / "Content line"); absent on the queued notice. */
+			toolCalls?: readonly SubagentToolCallSummary[];
+			contentLines?: readonly string[];
+			model?: string;
+			cost?: number;
+	  }
 	| ({ status: SubagentResult["status"] } & SubagentResult);
 
 export interface SubagentDeps {
@@ -206,8 +214,12 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 					thinkingLevel: thinkingOverride as never,
 					childTools,
 					signal,
-					onProgress: onUpdate
-						? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
+					onActivity: onUpdate
+						? (activity: SubagentActivity) =>
+								onUpdate({
+									content: [{ type: "text", text: `[${definition.name}] ${activity.progress}` }],
+									details: { status: "running", ...activity },
+								})
 						: undefined,
 				}),
 			signal,

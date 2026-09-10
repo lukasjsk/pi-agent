@@ -19,7 +19,32 @@ import {
 import type { AgentDefinition, AgentThinkingLevel } from "./definitions.ts";
 import { parseStructuredReport, type StructuredFooter } from "./report.ts";
 import { refId, type ModelRef } from "./models.ts";
+import { toolCallSummary } from "./summary.ts";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+
+/** One tool call of a running child, digested to a single line (CONTEXT.md "Tool-call summary"). */
+export interface SubagentToolCallSummary {
+	toolCallId: string;
+	toolName: string;
+	/** The call's single primary target: file path, command head, task excerpt, or URL. */
+	summary: string;
+	status: "running" | "done" | "error";
+}
+
+/** The child's live activity, relayed into the orchestrator's onUpdate (CONTEXT.md
+ *  "Tool-call summary" / "Content line"). `progress` keeps the legacy flat digest
+ *  (tool names + streamed tail) that drives the queued check and the partial
+ *  content text; the structured fields drive the richer live rows. */
+export interface SubagentActivity {
+	progress: string;
+	toolCalls: readonly SubagentToolCallSummary[];
+	/** Raw, unwrapped lines of the child's visible generated text (assistant text only), tail-most last. */
+	contentLines: readonly string[];
+	/** The child's current model as "provider/id". */
+	model?: string;
+	/** Best-effort accumulated child cost in USD; absent until the first usage-bearing message. */
+	cost?: number;
+}
 
 export type SubagentStatus = "completed" | "failed" | "cancelled";
 
@@ -55,8 +80,8 @@ export interface SpawnRunOptions {
 	/** Requested thinking level (per-spawn override ?? definition); the platform clamps per model. */
 	thinkingLevel?: AgentThinkingLevel;
 	signal?: AbortSignal;
-	/** Progress relay into the tool call's live rendering via onUpdate. */
-	onProgress?: (text: string) => void;
+	/** Live child activity relay into the tool call's rendering via onUpdate. */
+	onActivity?: (activity: SubagentActivity) => void;
 	/** Custom tools injected into the child session (§R10.6: worker → restricted scout tool).
 	 *  Their names are appended to the tools allowlist per the SDK contract; only the caller
 	 *  (orchestrator executor) decides which definitions get them — depth stays 1. */
@@ -78,6 +103,12 @@ export function validateToolNames(definition: AgentDefinition): void {
 }
 
 const PROGRESS_TAIL_CHARS = 300;
+/** Activity relay bounds: content lines kept per update and per-line payload cap (raw display
+ *  caps are applied at render time, see CONTEXT.md "Content line"). */
+const CONTENT_LINE_TAIL = 10;
+const CONTENT_LINE_PAYLOAD_CAP = 200;
+/** Tool-call summaries relayed per update (oldest dropped first). */
+const TOOL_CALL_TAIL = 20;
 
 export async function runSubagent(options: SpawnRunOptions): Promise<SubagentResult> {
 	const { definition, cwd, signal } = options;
@@ -140,7 +171,7 @@ interface RunOnceArgs {
 /** One attempt: a fresh isolated child session on one model. */
 async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 	const { options, agentDir, loader, model, thinkingLevel } = args;
-	const { definition, task, cwd, signal, onProgress } = options;
+	const { definition, task, cwd, signal, onActivity } = options;
 
 	// §R10.6: injected custom tools ride alongside the definition's allowlist — the SDK
 	// requires every custom tool name to be included in `tools` for it to be enabled.
@@ -159,23 +190,72 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 
 	let streamed = "";
 	const activity: string[] = [];
-	const emitProgress = () => {
-		if (!onProgress) return;
+	const toolCalls: SubagentToolCallSummary[] = [];
+	let costTotal = 0;
+	let costSeen = false;
+
+	/** Raw tail of the child's visible generated text (assistant text only — thinking
+	 *  deltas never reach here since only text_delta is accumulated). */
+	const contentLines = (): string[] =>
+		streamed
+			.split("\n")
+			.filter((line) => line.trim().length > 0)
+			.slice(-CONTENT_LINE_TAIL)
+			.map((line) => (line.length > CONTENT_LINE_PAYLOAD_CAP ? `${line.slice(0, CONTENT_LINE_PAYLOAD_CAP)}…` : line));
+
+	const emitActivity = () => {
+		if (!onActivity) return;
 		const toolNames = activity.slice(-3).join(", ");
 		const tail = streamed.slice(-PROGRESS_TAIL_CHARS);
-		onProgress(`${toolNames ? `tools: ${toolNames} · ` : ""}${tail}`);
+		onActivity({
+			progress: `${toolNames ? `tools: ${toolNames} · ` : ""}${tail}`,
+			toolCalls: toolCalls.slice(-TOOL_CALL_TAIL).map((call) => ({ ...call })),
+			contentLines: contentLines(),
+			model: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
+			cost: costSeen ? costTotal : undefined,
+		});
 	};
 	const unsubscribe = session.subscribe((event) => {
 		if (event.type === "message_update") {
 			if (event.assistantMessageEvent.type === "text_delta") {
 				streamed += event.assistantMessageEvent.delta;
-				emitProgress();
+				emitActivity();
 			}
 			return;
 		}
 		if (event.type === "tool_execution_start") {
 			activity.push(event.toolName);
-			emitProgress();
+			toolCalls.push({
+				toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName}#${toolCalls.length}`,
+				toolName: event.toolName,
+				summary: toolCallSummary(event.toolName, event.args),
+				status: "running",
+			});
+			emitActivity();
+			return;
+		}
+		if (event.type === "tool_execution_end") {
+			// Match by id, falling back to the oldest still-running call of the same name
+			// (mocked sessions may omit ids).
+			const call =
+				(typeof event.toolCallId === "string" && toolCalls.find((c) => c.toolCallId === event.toolCallId)) ||
+				toolCalls.find((c) => c.toolName === event.toolName && c.status === "running");
+			if (call) call.status = event.isError ? "error" : "done";
+			emitActivity();
+			return;
+		}
+		if (event.type === "message_end") {
+			// Live cost: same buckets the platform's getSessionStats() sums — assistant
+			// messages plus tool-result usage (nested scout spawns), best-effort while
+			// streaming (research doc §2–§3).
+			const usage = (event.message as { usage?: { cost?: { total?: number } } } | undefined)?.usage;
+			const total = usage?.cost?.total;
+			if (typeof total === "number" && total > 0) {
+				costTotal += total;
+				costSeen = true;
+				emitActivity();
+			}
+			return;
 		}
 	});
 

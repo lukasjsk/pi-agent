@@ -13,6 +13,7 @@ This log records notable functionality added to this configuration repository. S
 - Result transport: in-context results are capped at 10KB; oversized reports overflow to a session-scoped temp file (`$TMPDIR/pi-subagents/<session-id>/<spawn-id>.md`) whose path is referenced in the truncated in-context copy, with the full payload also available in the tool result's details.
 - A per-session `SpawnScheduler` enforces a concurrency cap (default 4, configurable via `~/.pi/agent/configs/subagents.json`) and queues excess spawns. Esc cancels running and queued children, each returning a partial-result report. A failing child never cancels its siblings.
 - Custom TUI rendering for subagent tool calls: collapsed status line per child (role, task excerpt, status, elapsed, usage) with the child's streamed output relayed live while running, and the final structured report (result body, decision points, open questions) rendered distinctly.
+- Live subagent activity view: while a child runs, its tool call is relayed as one-line summaries (`status marker · tool name · single primary target` — file path, command head, task excerpt, or URL; recent five collapsed, all expanded), the last three raw content lines of its visible generated text (per-line capped with an ellipsis marker), the child's current model, and a best-effort accumulated cost once the first usage-bearing message settles. Thinking output is never shown.
 
 ## 2026-09-03
 

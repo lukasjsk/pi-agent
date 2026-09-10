@@ -602,6 +602,96 @@ test("collapsed result is one status line with role, elapsed, usage, and counts"
 	assert.doesNotMatch(plain, /## Start Here/, "collapsed does not include the report body");
 });
 
+test("live activity view: tool-call summary rows, content lines, model and cost", () => {
+	const text = renderSubagentResult(
+		{
+			details: {
+				status: "running",
+				progress: "tools: read, bash · streamed tail",
+				toolCalls: [
+					{ toolCallId: "1", toolName: "read", summary: "src/util.ts", status: "done" },
+					{ toolCallId: "2", toolName: "bash", summary: "bun test", status: "error" },
+					{ toolCallId: "3", toolName: "edit", summary: "src/a.ts", status: "running" },
+				],
+				contentLines: ["reading files", "editing now"],
+				model: "github-copilot/gpt-5.6-terra",
+				cost: 0.0123,
+			},
+		},
+		{ expanded: false, isPartial: true },
+		theme,
+		{ state: { startedAt: Date.now() - 3_000 }, args: { agent: "worker", task: "T" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	const lines = text.split("\n");
+	// Header: status · role · elapsed · model · cost; the progress tail is suppressed
+	// once richer rows exist (it duplicates the content lines).
+	assert.match(lines[0], /^◦ running · worker · 3s · github-copilot\/gpt-5\.6-terra · \$0\.012$/);
+	assert.doesNotMatch(text, /streamed tail/);
+	// One tool-call summary row per call, status marker + name + primary target.
+	assert.match(lines[1], /^  ✓ read src\/util\.ts$/);
+	assert.match(lines[2], /^  ✗ bash bun test$/);
+	assert.match(lines[3], /^  ◦ edit src\/a\.ts$/);
+	// Content lines: raw lines, shown after the tool rows.
+	assert.match(lines[4], /^  reading files$/);
+	assert.match(lines[5], /^  editing now$/);
+	assert.equal(lines.length, 6);
+});
+
+test("live activity view collapsed caps: 5 tool rows and 3 content lines; expanded shows all", () => {
+	const toolCalls = Array.from({ length: 8 }, (_, i) => ({
+		toolCallId: String(i),
+		toolName: "read",
+		summary: `f${i}.ts`,
+		status: "done" as const,
+	}));
+	const contentLines = Array.from({ length: 8 }, (_, i) => `line ${i}`);
+	const details = { status: "running" as const, progress: "", toolCalls, contentLines };
+	const ctx = { state: {}, args: { agent: "worker", task: "T" } };
+
+	const collapsed = renderSubagentResult(
+		{ details },
+		{ expanded: false, isPartial: true },
+		theme,
+		ctx,
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	const cLines = collapsed.split("\n");
+	assert.match(cLines[1], /f3\.ts$/, "collapsed shows the last 5 tool rows");
+	assert.match(cLines[5], /f7\.ts$/);
+	assert.doesNotMatch(collapsed, /f2\.ts/);
+	assert.match(cLines[6], /line 5$/, "collapsed shows the last 3 content lines");
+	assert.match(cLines[8], /line 7$/);
+	assert.doesNotMatch(collapsed, /line 4/);
+
+	const expanded = renderSubagentResult(
+		{ details },
+		{ expanded: true, isPartial: true },
+		theme,
+		ctx,
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(expanded, /✓ read f0\.ts/, "expanded shows every relayed tool row");
+	assert.match(expanded, /  line 0/);
+});
+
+test("content lines are capped raw with an ellipsis marker; cost hidden while zero", () => {
+	const text = renderSubagentResult(
+		{
+			details: {
+				status: "running",
+				progress: "",
+				toolCalls: [],
+				contentLines: ["x".repeat(150)],
+				model: "p/m",
+				cost: 0,
+			},
+		},
+		{ expanded: false, isPartial: true },
+		theme,
+		{ state: {}, args: { agent: "scout", task: "T" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(text, /  x{100}…$/, "per-line cap with … marker, raw text otherwise");
+	assert.doesNotMatch(text, /\$/, "no cost line until usage has been seen");
+});
+
 test("partial results render a live status line; queued state is visible", () => {
 	const running = renderSubagentResult(
 		{ details: { status: "running", progress: "tools: read · some streamed tail" } },

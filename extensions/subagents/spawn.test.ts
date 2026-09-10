@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart, type FakeSession } from "./pi-mock.ts";
+import { fakeSession, installPlatformMock, messageEnd, platformHooks, textDelta, toolEnd, toolStart, type FakeSession } from "./pi-mock.ts";
 
 installPlatformMock();
 
@@ -294,24 +294,70 @@ test("definition warnings ride the spawn's diagnostics", async () => {
 	);
 });
 
-test("relays child activity as progress", async () => {
-	const progress: string[] = [];
+test("relays structured child activity: progress, tool summaries, content lines, cost", async () => {
+	const updates: Parameters<NonNullable<Parameters<typeof runSubagent>[0]["onActivity"]>>[] = [];
 	platformHooks.createAgentSession = async () => {
 		const session = fakeSession({
 			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
 		});
 		session.prompt = async () => {
-			toolStart(session, "grep");
+			toolStart(session, "read", { file_path: "src/util.ts" }, "call-1");
+			toolEnd(session, "read", { toolCallId: "call-1" });
+			toolStart(session, "bash", { command: "bun test\nsecond line" }, "call-2");
+			toolEnd(session, "bash", { toolCallId: "call-2", isError: true });
+			textDelta(session, "first line\n\nsecond line\n");
 			textDelta(session, "x".repeat(400));
+			messageEnd(session, { usage: { cost: { total: 0.0123 } } });
 		};
 		return { session };
 	};
 
-	await runSubagent({ ...baseOptions, onProgress: (text) => progress.push(text) });
+	await runSubagent({ ...baseOptions, onActivity: (activity) => updates.push(activity) });
 
-	assert.ok(progress.length >= 2);
-	assert.match(progress[0], /tools: grep/);
-	assert.ok(progress[progress.length - 1].length <= 330, "progress text is a bounded tail");
+	assert.ok(updates.length >= 6);
+	// Legacy flat digest still present and bounded.
+	assert.match(updates[0].progress, /tools: read/);
+	assert.ok(updates[updates.length - 1].progress.length <= 330, "progress text is a bounded tail");
+	// Tool-call summaries (CONTEXT.md "Tool-call summary"): one line each, status markers.
+	const last = updates[updates.length - 1];
+	assert.deepEqual(
+		last.toolCalls.map((c) => [c.toolName, c.summary, c.status]),
+		[
+			["read", "src/util.ts", "done"],
+			["bash", "bun test", "error"],
+		],
+	);
+	// Content lines (CONTEXT.md "Content line"): raw non-empty lines, tail-most last.
+	assert.deepEqual(last.contentLines.slice(0, 1), ["first line"]);
+	assert.ok(last.contentLines[last.contentLines.length - 1].startsWith("xxx"));
+	assert.equal(last.contentLines.includes(""), false, "empty lines are dropped");
+	// Model + live cost.
+	assert.equal(last.model, "test-provider/test-model");
+	assert.equal(last.cost, 0.0123);
+});
+
+test("activity relay is bounded: at most 20 tool calls and 10 content lines", async () => {
+	const updates: Parameters<NonNullable<Parameters<typeof runSubagent>[0]["onActivity"]>>[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+		});
+		session.prompt = async () => {
+			for (let i = 0; i < 25; i++) {
+				toolStart(session, "read", { file_path: `f${i}.ts` }, `call-${i}`);
+				toolEnd(session, "read", { toolCallId: `call-${i}` });
+			}
+			for (let i = 0; i < 15; i++) textDelta(session, `line ${i}\n`);
+		};
+		return { session };
+	};
+
+	await runSubagent({ ...baseOptions, onActivity: (activity) => updates.push(activity) });
+	const last = updates[updates.length - 1];
+	assert.equal(last.toolCalls.length, 20);
+	assert.equal(last.toolCalls[0].summary, "f5.ts", "oldest tool calls dropped first");
+	assert.equal(last.contentLines.length, 10);
+	assert.equal(last.contentLines[0], "line 5");
 });
 
 test("uses the last non-empty assistant message as the report", async () => {

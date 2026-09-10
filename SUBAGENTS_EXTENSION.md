@@ -180,10 +180,12 @@ One registered tool, **blocking**, params:
 3. **Bundled scout keeps `skills: on`.**
 4. **Reporting:** each SKILL.md the worker actually loads surfaces as a footer `decisionPoint` (skill name + why it
    matched); quiet when none.
-5. **TUI presentation (recommendation — revisit during implementation):** custom `renderCall`/`renderResult` per
-   child tool call. Collapsed: one status line per child — `role · task excerpt · status (queued/running/cancelled/
-   failed) · elapsed · usage`. Expanded: the child's streamed text (relayed from its event stream via `onUpdate`).
-   The final result renders the structured report distinctly (result body, decision points, open questions).
+5. **TUI presentation (#27; live view refined per CONTEXT.md "Tool-call summary" / "Content line"):** custom
+   `renderCall`/`renderResult` per child tool call. Collapsed running: one status line per child — `role · elapsed ·
+   model · live cost` — plus one row per recent tool call (`status marker · tool name · single primary target`:
+   file path, command head, task excerpt, or URL) and the last three raw content lines of the child's visible
+   generated text. Expanded: every relayed tool row and content line. The final result renders the structured report
+   distinctly (result body, decision points, open questions).
 6. **Worker-side restricted tool (from #14, #17):** the same tool, injected via `customTools`, but with no `agent`
    parameter — it **always spawns the bundled `scout`**; params: `task` + optional `model`/`thinkingLevel`.
    Parallel scouts from a worker are allowed under the same global cap. User-defined agents are never spawnable by

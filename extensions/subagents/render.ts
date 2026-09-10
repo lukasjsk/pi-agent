@@ -1,18 +1,38 @@
-// TUI presentation of subagent tool calls (spec §R10.5, map #12 ticket #27).
-// Collapsed: one status line per child — role · task excerpt · status · elapsed · usage.
-// Expanded: the full structured report — result body, decision points, open questions,
-// provenance, and diagnostics each visually separate. Pure rendering logic over the
-// platform's Text component (aliased by the extension loader).
+// TUI presentation of subagent tool calls (spec §R10.5, map #12 ticket #27; live view per
+// CONTEXT.md "Tool-call summary" and "Content line").
+// Collapsed: one status line per child — role · task excerpt · status · elapsed · usage —
+// with recent tool calls as one-line summaries and the last three content lines.
+// Expanded: all relayed tool rows and content lines; the full structured report once
+// settled — result body, decision points, open questions, provenance, and diagnostics
+// each visually separate. Pure rendering logic over the platform's Text component.
 
 import { Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SubagentToolDetails } from "./index.ts";
+import { excerpt } from "./summary.ts";
+
+/** Re-exported for existing importers; the digest helpers live in summary.ts. */
+export { excerpt } from "./summary.ts";
 
 type TextComponent = InstanceType<typeof Text>;
 
-/** Details shape: running partials vs the settled full payload. */
+/** Details shape: running partials vs the settled full payload.
+ *
+ * The running branch carries the child's live activity relay (see CONTEXT.md):
+ * `toolCalls` are per-call one-line summaries with status markers, `contentLines`
+ * the raw tail of the child's visible generated text, `model`/`cost` the child's
+ * current model and best-effort accumulated cost. All optional so the queued
+ * notice (nothing ran yet) can relay `progress` alone.
+ */
 export type RenderDetails =
-	| { status: "running"; progress: string }
+	| {
+			status: "running";
+			progress: string;
+			toolCalls?: readonly RenderToolCallSummary[];
+			contentLines?: readonly string[];
+			model?: string;
+			cost?: number;
+	  }
 	| ({
 			status: "completed" | "failed" | "cancelled";
 			report: string;
@@ -29,6 +49,15 @@ export interface RenderUsage {
 	input?: number;
 	output?: number;
 	cacheRead?: number;
+}
+
+/** One tool call of a running child, digested to a single line (CONTEXT.md "Tool-call summary"). */
+export interface RenderToolCallSummary {
+	toolCallId: string;
+	toolName: string;
+	/** The call's single primary target: file path, command head, task excerpt, or URL. */
+	summary: string;
+	status: "running" | "done" | "error";
 }
 
 export interface RenderResultLike {
@@ -56,10 +85,9 @@ const STATUS_ICON: Record<RenderStatus, string> = {
 	cancelled: "⊘",
 };
 
-/** One-line task excerpt, newlines flattened. */
-export function excerpt(task: string, max = 48): string {
-	const flat = task.replace(/\s+/g, " ").trim();
-	return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+/** Per-line display cap for raw content lines (CONTEXT.md "Content line"). */
+export function capLine(line: string, max = 100): string {
+	return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
 /** Extract the child's role from the tool call args (both tool variants). */
@@ -105,7 +133,11 @@ export function renderSubagentCall(
 	return component;
 }
 
-/** Result rendering: live status line while streaming; structured report once settled. */
+/** Live collapsed view limits: recent tool rows and content lines shown. */
+const LIVE_TOOL_ROWS = 5;
+const LIVE_CONTENT_LINES = 3;
+
+/** Result rendering: live activity view while streaming; structured report once settled. */
 export function renderSubagentResult(
 	result: RenderResultLike,
 	options: { expanded: boolean; isPartial: boolean },
@@ -117,14 +149,36 @@ export function renderSubagentResult(
 	const elapsed = formatElapsed(context.state.startedAt as number | undefined);
 	const tokens = formatTokens(result.usage);
 
-	// Streaming: one live status line; expanded shows more of the streamed child text.
+	// Streaming: live activity view — status line, tool-call summary rows, content lines.
+	// Expanded shows every relayed row/line; collapsed caps to the recent tail.
 	if (options.isPartial || details?.status === "running") {
 		const progress = details?.status === "running" ? details.progress : "";
 		const status = liveStatus(progress);
+		const live = details?.status === "running" ? details : undefined;
+		const toolCalls = live?.toolCalls ?? [];
+		const contentLines = live?.contentLines ?? [];
+
 		let line = `${statusLine(status, theme)} ${theme.fg("dim", "·")} ${role}`;
 		if (elapsed) line += theme.fg("dim", ` · ${elapsed}`);
-		if (progress) line += theme.fg("dim", ` · ${excerpt(progress, options.expanded ? 160 : 60)}`);
-		return new Text(line, 0, 0);
+		if (live?.model) line += theme.fg("dim", ` · ${live.model}`);
+		if (live?.cost && live.cost > 0) line += theme.fg("dim", ` · $${live.cost.toFixed(3)}`);
+		// The progress tail duplicates the content lines; only show it while nothing
+		// richer has arrived (queued notice, no activity yet).
+		if (progress && toolCalls.length === 0 && contentLines.length === 0) {
+			line += theme.fg("dim", ` · ${excerpt(progress, options.expanded ? 160 : 60)}`);
+		}
+
+		const rows: string[] = [line];
+		for (const call of options.expanded ? toolCalls : toolCalls.slice(-LIVE_TOOL_ROWS)) {
+			const icon = call.status === "running" ? STATUS_ICON.running : call.status === "error" ? STATUS_ICON.failed : STATUS_ICON.completed;
+			const color = call.status === "running" ? STATUS_COLOR.running : call.status === "error" ? STATUS_COLOR.failed : STATUS_COLOR.completed;
+			rows.push(`  ${theme.fg(color, icon)} ${theme.fg("toolTitle", call.toolName)}${call.summary ? theme.fg("dim", ` ${call.summary}`) : ""}`);
+		}
+		const shown = options.expanded ? contentLines : contentLines.slice(-LIVE_CONTENT_LINES);
+		for (const content of shown) {
+			rows.push(`  ${theme.fg("toolOutput", capLine(content, options.expanded ? 160 : 100))}`);
+		}
+		return new Text(rows.join("\n"), 0, 0);
 	}
 
 	// Settled.
