@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart, type FakeSession } from "./pi-mock.ts";
+
+installPlatformMock();
+
+const { runSubagent, validateToolNames } = await import("./spawn.ts");
+const { parseAgentDefinition } = await import("./definitions.ts");
+
+const scout = parseAgentDefinition(
+	"/x/scout.md",
+	"---\nname: scout\ndescription: explores\ntools: [read, grep]\n---\nExplore and report.",
+	"bundled",
+);
+
+function lastCaptured(captured: Array<Record<string, unknown>>): Record<string, unknown> {
+	assert.ok(captured.length > 0, "expected createAgentSession to be called");
+	return captured[captured.length - 1];
+}
+
+const baseOptions = {
+	definition: scout,
+	task: "Map the auth flow.",
+	cwd: "/repo",
+	agentDir: "/fake/agent-dir",
+};
+
+test("assembles an isolated in-process child per the spec's isolation rules", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	const loaders: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		const loader = options.resourceLoader as { options: Record<string, unknown> };
+		loaders.push(loader.options);
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "## Files Retrieved\n- a.ts:1-2" }] }],
+		});
+		session.prompt = async () => {
+			toolStart(session, "grep");
+			textDelta(session, "Working… ");
+			textDelta(session, "done.");
+		};
+		return { session };
+	};
+
+	const result = await runSubagent(baseOptions);
+
+	const opts = lastCaptured(captured);
+	assert.deepEqual(opts.tools, ["read", "grep"]);
+	assert.equal(opts.cwd, "/repo");
+	assert.equal(opts.agentDir, "/fake/agent-dir");
+	assert.deepEqual(opts.sessionManager, { kind: "inMemory", cwd: "/repo" });
+	assert.deepEqual(opts.model, undefined); // no model option → platform resolves from settings
+
+	const loaderOptions = loaders[loaders.length - 1];
+	assert.equal(loaderOptions.noExtensions, true, "children never load extensions");
+	assert.equal(loaderOptions.noThemes, true);
+	assert.equal(loaderOptions.noPromptTemplates, true);
+	assert.equal(loaderOptions.cwd, "/repo");
+	const systemPrompt = loaderOptions.systemPromptOverride as (base: string | undefined) => string | undefined;
+	assert.equal(systemPrompt(undefined), "Explore and report.");
+
+	assert.equal(result.status, "completed");
+	assert.equal(result.report, "## Files Retrieved\n- a.ts:1-2");
+	assert.equal(result.modelUsed, "test-provider/test-model");
+	assert.deepEqual(result.diagnostics, []);
+});
+
+test("passes the requested model through to the child", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession() };
+	};
+	const model = { provider: "anthropic", id: "claude-opus-4-5" };
+	await runSubagent({ ...baseOptions, model: model as never });
+	assert.deepEqual(lastCaptured(captured).model, model);
+});
+
+test("relays child activity as progress", async () => {
+	const progress: string[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+		});
+		session.prompt = async () => {
+			toolStart(session, "grep");
+			textDelta(session, "x".repeat(400));
+		};
+		return { session };
+	};
+
+	await runSubagent({ ...baseOptions, onProgress: (text) => progress.push(text) });
+
+	assert.ok(progress.length >= 2);
+	assert.match(progress[0], /tools: grep/);
+	assert.ok(progress[progress.length - 1].length <= 330, "progress text is a bounded tail");
+});
+
+test("uses the last non-empty assistant message as the report", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "intermediate" }] },
+				{ role: "toolResult", content: [{ type: "text", text: "tool output" }] },
+				{ role: "assistant", content: [{ type: "text", text: "" }, { type: "text", text: "final report" }] },
+			],
+		}),
+	});
+	const result = await runSubagent(baseOptions);
+	assert.equal(result.report, "final report");
+});
+
+test("abort during the run returns a cancelled partial result", async () => {
+	const controller = new AbortController();
+	const sessions: FakeSession[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			prompt: async (s) => {
+				textDelta(s, "partial progress");
+				while (!s.aborted) await new Promise((resolve) => setTimeout(resolve, 5));
+			},
+		});
+		sessions.push(session);
+		return { session };
+	};
+
+	const run = runSubagent({ ...baseOptions, signal: controller.signal });
+	setTimeout(() => controller.abort(), 20);
+	const result = await run;
+
+	assert.equal(result.status, "cancelled");
+	assert.equal(result.report, "partial progress");
+	assert.ok(result.diagnostics.some((d) => /cancelled/.test(d)));
+	assert.equal(sessions[0].abortCount, 1, "child session was aborted");
+});
+
+test("a thrown prompt error fails the spawn without throwing to the caller", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [],
+			prompt: async () => {
+				throw new Error("provider exploded");
+			},
+		}),
+	});
+	const result = await runSubagent(baseOptions);
+	assert.equal(result.status, "failed");
+	assert.ok(result.diagnostics.some((d) => /provider exploded/.test(d)));
+});
+
+test("an error message on settled state fails the spawn", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({ errorMessage: "all retries exhausted" }),
+	});
+	const result = await runSubagent(baseOptions);
+	assert.equal(result.status, "failed");
+	assert.ok(result.diagnostics.some((d) => /all retries exhausted/.test(d)));
+});
+
+test("unknown tool names fail the spawn before any session is created", async () => {
+	let createCalls = 0;
+	platformHooks.createAgentSession = async () => {
+		createCalls++;
+		return { session: fakeSession() };
+	};
+
+	assert.throws(() => validateToolNames({ ...scout, tools: ["read", "deploy", "teleport"] }), (error: unknown) => {
+		assert.match(String(error), /unknown tool name\(s\): deploy, teleport/);
+		assert.match(String(error), /read, bash, powershell, edit, write, grep, find, ls/);
+		return true;
+	});
+	await assert.rejects(
+		runSubagent({ ...baseOptions, definition: { ...scout, tools: ["read", "deploy"] } }),
+		/unknown tool name\(s\): deploy/,
+	);
+	assert.equal(createCalls, 0, "no child session was created");
+});
+
+test("the child session is disposed after the run", async () => {
+	const sessions: FakeSession[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession();
+		sessions.push(session);
+		return { session };
+	};
+	await runSubagent(baseOptions);
+	assert.equal(sessions[0].disposed, true);
+});
