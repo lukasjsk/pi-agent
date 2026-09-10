@@ -6,6 +6,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 
 | Path | Purpose |
 | --- | --- |
+| [`extensions/subagents/`](extensions/subagents) | A `subagent` tool that lets the orchestrator delegate work to isolated, ephemeral child sessions. Ships bundled `worker` (implementation) and `scout` (read-only exploration) agent definitions with model fallback, structured reports, a concurrency cap with queueing, Esc cancellation, and workers spawning read-only scouts at depth 1. Users can override or add agent definitions in `~/.pi/agent/agents/*.md`. Spec: [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md). |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
 | [`extensions/ask-user-question.ts`](extensions/ask-user-question.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
 | [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
@@ -52,13 +53,15 @@ prompts, the top-level `agents/` (`explorer`, `planner`, `implementer`, `reviewe
 moved to [`deprecated/`](deprecated/DEPRECATED.md). They are no longer installed by the install
 script above.
 
-Replacement work (a new configurable `subagent` extension with `worker`, `scout`, and
-`researcher` subagents, plus new `/analyze-and-plan` and `/implement-and-review` prompts built on
-it) is tracked in [`PLANNED_FEATURES.md`](PLANNED_FEATURES.md).
+The replacement subagents extension is now implemented: [`extensions/subagents/`](extensions/subagents)
+ships the `subagent` tool with `worker` and `scout` bundled agents. Remaining replacement work
+(a `researcher` subagent and new `/analyze-and-plan` and `/implement-and-review` prompts built on
+the extension) is tracked in [`PLANNED_FEATURES.md`](PLANNED_FEATURES.md).
 
 ## Notes
 
-- The footer extension is self-contained TypeScript but expects Pi's extension runtime packages; it is not a standalone Node package.
+- Extensions are self-contained TypeScript but expect Pi's extension runtime packages; they are not standalone Node packages.
+- The subagents extension reads an optional concurrency setting from `~/.pi/agent/configs/subagents.json` (`maxConcurrent`, default 4); agent definitions override by matching `name` in `~/.pi/agent/agents/*.md`.
 - Review agent prompts and extension code before installing them into a shared or untrusted environment.
 
 ## License

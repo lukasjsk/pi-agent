@@ -2,6 +2,18 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-10
+
+### Added
+
+- A new `subagents` extension that replaces the deprecated `subagent` extension (spec: `SUBAGENTS_EXTENSION.md`). It registers a single blocking `subagent` tool on the orchestrator; each call spawns an isolated, ephemeral, non-interactive child session whose entire context is the self-contained `task` brief. Bundled agent definitions ship with the extension: `worker` (general implementation work, self-selects skills, can spawn read-only scouts at depth 1 via an injected restricted tool) and `scout` (read-only exploration returning a compressed report with exact `file:line` references).
+- Agent definitions are markdown files with a closed frontmatter set (`name`, `description`, required `tools` allowlist, ordered `model` fallback list, `thinkingLevel`, `skills` on/off). Bundled definitions live inside the extension; a same-named file in `~/.pi/agent/agents/*.md` overrides one. Discovery is fresh on every spawn, and a corrupt definition fails only its own spawn.
+- Model fallback: at spawn, entries without valid auth are skipped; a runtime provider failure transparently retries the task on the next entry in the list; an exhausted list fails the spawn with per-candidate diagnostics. A per-spawn `model` or `thinkingLevel` override replaces the definition's list/level entirely, with the thinking level clamped by the platform.
+- Structured output contract: every child report ends with a fenced JSON footer (`openQuestions`, `decisionPoints`, `filesTouched`) that the extension parses with graceful degradation (unparseable footers never fail the child). Extension-appended provenance records the model actually used, requested vs effective thinking level, and fallback/cancellation/parse diagnostics.
+- Result transport: in-context results are capped at 10KB; oversized reports overflow to a session-scoped temp file (`$TMPDIR/pi-subagents/<session-id>/<spawn-id>.md`) whose path is referenced in the truncated in-context copy, with the full payload also available in the tool result's details.
+- A per-session `SpawnScheduler` enforces a concurrency cap (default 4, configurable via `~/.pi/agent/configs/subagents.json`) and queues excess spawns. Esc cancels running and queued children, each returning a partial-result report. A failing child never cancels its siblings.
+- Custom TUI rendering for subagent tool calls: collapsed status line per child (role, task excerpt, status, elapsed, usage) with the child's streamed output relayed live while running, and the final structured report (result body, decision points, open questions) rendered distinctly.
+
 ## 2026-09-03
 
 ### Added
