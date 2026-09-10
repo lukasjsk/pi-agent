@@ -19,6 +19,7 @@ import {
 import type { AgentDefinition, AgentThinkingLevel } from "./definitions.ts";
 import { parseStructuredReport, type StructuredFooter } from "./report.ts";
 import { refId, type ModelRef } from "./models.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export type SubagentStatus = "completed" | "failed" | "cancelled";
 
@@ -56,6 +57,10 @@ export interface SpawnRunOptions {
 	signal?: AbortSignal;
 	/** Progress relay into the tool call's live rendering via onUpdate. */
 	onProgress?: (text: string) => void;
+	/** Custom tools injected into the child session (§R10.6: worker → restricted scout tool).
+	 *  Their names are appended to the tools allowlist per the SDK contract; only the caller
+	 *  (orchestrator executor) decides which definitions get them — depth stays 1. */
+	childTools?: ToolDefinition[];
 }
 
 /** Platform built-in tool names (sdk.md "Tools"). */
@@ -137,10 +142,15 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 	const { options, agentDir, loader, model, thinkingLevel } = args;
 	const { definition, task, cwd, signal, onProgress } = options;
 
+	// §R10.6: injected custom tools ride alongside the definition's allowlist — the SDK
+	// requires every custom tool name to be included in `tools` for it to be enabled.
+	const injected = options.childTools ?? [];
+
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
-		tools: definition.tools,
+		tools: injected.length > 0 ? [...definition.tools, ...injected.map((tool) => tool.name)] : definition.tools,
+		customTools: injected.length > 0 ? injected : undefined,
 		model: model as Model | undefined,
 		thinkingLevel, // platform clamps to model capabilities; re-clamps on fallback switch (§R9.4)
 		resourceLoader: loader,

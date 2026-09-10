@@ -7,7 +7,13 @@
 // TUI rendering (#27).
 
 import { Type } from "typebox";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	defineTool,
+	getAgentDir,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -22,26 +28,30 @@ import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 
+const taskParam = Type.String({
+	description:
+		"Self-contained brief for the subagent. This is the entire context the child receives — " +
+		"include everything it needs (goal, relevant file paths, excerpts of prior results).",
+});
+const modelParam = Type.Optional(
+	Type.String({
+		description:
+			'Leave unset unless the user explicitly requests a specific model. When set, a "provider/model-id" ' +
+			'(e.g. "github-copilot/gpt-5.6-terra") replaces the agent\'s configured model fallback list entirely.',
+	}),
+);
+const thinkingLevelParam = Type.Optional(
+	Type.String({
+		description: `Leave unset unless the user explicitly asks for a thinking level. ` +
+			`When set, one of: ${THINKING_LEVELS.join(" | ")}; clamped to the model's capabilities by the platform.`,
+	}),
+);
+
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to spawn." }),
-	task: Type.String({
-		description:
-			"Self-contained brief for the subagent. This is the entire context the child receives — " +
-			"include everything it needs (goal, relevant file paths, excerpts of prior results).",
-	}),
-	model: Type.Optional(
-		Type.String({
-			description:
-				'Leave unset unless the user explicitly requests a specific model. When set, a "provider/model-id" ' +
-				'(e.g. "github-copilot/gpt-5.6-terra") replaces the agent\'s configured model fallback list entirely.',
-		}),
-	),
-	thinkingLevel: Type.Optional(
-		Type.String({
-			description: `Leave unset unless the user explicitly asks for a thinking level. ` +
-				`When set, one of: ${THINKING_LEVELS.join(" | ")}; clamped to the model's capabilities by the platform.`,
-		}),
-	),
+	task: taskParam,
+	model: modelParam,
+	thinkingLevel: thinkingLevelParam,
 });
 
 export type SubagentToolDetails =
@@ -60,6 +70,34 @@ export interface SubagentDeps {
 	getSessionId?: () => string | undefined;
 	/** Extension-wide spawn cap + queue (§R8.3–R8.4). Shared across all parallel tool calls. */
 	scheduler: SpawnScheduler;
+	/** Custom tools injected into worker child sessions (§R10.6): the restricted scout spawner.
+	 *  Absent in tests unless wired explicitly. */
+	childTools?: () => ToolDefinition[];
+}
+
+/** The worker role name — the only definition whose children receive the restricted scout tool. */
+export const WORKER_AGENT_NAME = "worker";
+/** Name of the restricted subagent tool injected into worker sessions (spec §R10.6). */
+export const SCOUT_TOOL_NAME = "scout";
+
+/** The worker-side restricted subagent tool (§R10.6): no agent parameter — it always spawns
+ *  the scout. Parallel calls from the worker contend on the same global scheduler, and the
+ *  spawned scout never receives a subagent tool itself (spawn depth stays 1). */
+export function createScoutTool(deps: SubagentDeps): ToolDefinition {
+	const executor = createSubagentExecutor(deps, "scout");
+	return defineTool({
+		name: SCOUT_TOOL_NAME,
+		label: "Scout",
+		executionMode: "parallel",
+		description:
+			"Delegate exploration to a scout subagent and wait for its report. The scout is read-only " +
+			"(read, grep, find, ls) and returns a map of the relevant code with exact file:line references. " +
+			"Write the task self-contained — the scout sees nothing else from this conversation. " +
+			"One call spawns one scout; parallel calls are allowed.",
+		parameters: Type.Object({ task: taskParam, model: modelParam, thinkingLevel: thinkingLevelParam }),
+		execute: (_toolCallId, params, signal, onUpdate) =>
+			executor(params as { agent?: string; task: string; model?: string; thinkingLevel?: string }, signal, onUpdate as never),
+	});
 }
 
 /** Compose the tool result text: markdown body, structured fields, then extension-appended provenance.
@@ -107,16 +145,20 @@ ${result.diagnostics.map((d) => `- ${d}`).join("\n")}`
 	return [`${header}${body}`, tail].filter(Boolean).join("\n\n");
 }
 
-/** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O). */
-export function createSubagentExecutor(deps: SubagentDeps) {
+/** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O).
+ *
+ * With `fixedAgent` set (worker-side scout tool), the executor always spawns that agent and
+ * `params.agent` is absent from the tool's schema.
+ */
+export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) {
 	return async function execute(
-		params: { agent: string; task: string; model?: string; thinkingLevel?: string },
+		params: { agent?: string; task: string; model?: string; thinkingLevel?: string },
 		signal: AbortSignal | undefined,
 		onUpdate: ((partial: { content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }) => void) | undefined,
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }> {
 		let definition: AgentDefinition;
 		try {
-			definition = deps.resolveAgent(params.agent);
+			definition = deps.resolveAgent(fixedAgent ?? params.agent!);
 		} catch (error) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
@@ -145,6 +187,10 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
 
+		// Depth-1 nesting (§R10.6): only the worker's children receive the restricted scout
+		// tool; scouts and user-defined agents never do, and no child gets the general tool.
+		const childTools = definition.name === WORKER_AGENT_NAME ? deps.childTools?.() : undefined;
+
 		const result = await deps.scheduler.run(
 			() =>
 				runSubagent({
@@ -155,6 +201,7 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 					modelChain,
 					modelDiagnostics,
 					thinkingLevel: thinkingOverride as never,
+					childTools,
 					signal,
 					onProgress: onUpdate
 						? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
@@ -222,9 +269,11 @@ function toolDescription(discovery: AgentDiscovery): string {
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		// Extension-wide cap (§R8.3): one scheduler per session, shared by every parallel
-		// subagent tool call. Config: ~/.pi/agent/configs/subagents.json { maxConcurrent }.
-		const scheduler = new SpawnScheduler(loadMaxConcurrent());
-		const executor = createSubagentExecutor({ ...makeDeps(ctx), scheduler });
+		// subagent tool call — including scout spawns from workers, which capture this same
+		// deps object via deps.childTools. Config: ~/.pi/agent/configs/subagents.json.
+		const deps = makeDeps(ctx);
+		deps.scheduler = new SpawnScheduler(loadMaxConcurrent());
+		const executor = createSubagentExecutor(deps);
 		pi.registerTool({
 			name: "subagent",
 			label: "Subagent",
@@ -237,7 +286,7 @@ export default function (pi: ExtensionAPI) {
 }
 
 function makeDeps(ctx: ExtensionContext): SubagentDeps {
-	return {
+	const deps: SubagentDeps = {
 		resolveAgent: (name) => resolveAgent(discoverAgents(discoveryDirs()), name),
 		getModel: () => ctx.model,
 		getModelRegistry: () => ctx.modelRegistry as ModelRegistryLike | undefined,
@@ -245,7 +294,12 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 		agentDir: getAgentDir(),
 		overflowRoot: tmpdir(),
 		getSessionId: () => ctx.sessionManager?.getSessionId(),
+		scheduler: undefined as never, // assigned by the factory right after makeDeps
 	};
+	// The restricted scout tool for worker children must see the SAME deps object (same
+	// scheduler, registry, overflow root) — it closes over `deps`, not a copy.
+	deps.childTools = () => [createScoutTool(deps)];
+	return deps;
 }
 
 /** Bundled definitions live next to this module; user overrides in <agentDir>/agents. */

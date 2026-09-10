@@ -78,6 +78,7 @@ export const platformHooks: {
 export function installPlatformMock(): void {
 	mock.module("@earendil-works/pi-coding-agent", () => ({
 		createAgentSession: (options: Record<string, unknown>) => platformHooks.createAgentSession(options),
+		defineTool: (tool: unknown) => tool,
 		DefaultResourceLoader: class {
 			options: Record<string, unknown>;
 			constructor(options: Record<string, unknown>) {
