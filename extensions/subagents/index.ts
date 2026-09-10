@@ -24,6 +24,7 @@ import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
 import { DEFAULT_MAX_CONCURRENT, parseMaxConcurrent, SpawnScheduler } from "./concurrency.ts";
 import { EMPTY_FOOTER } from "./report.ts";
+import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -97,6 +98,8 @@ export function createScoutTool(deps: SubagentDeps): ToolDefinition {
 		parameters: Type.Object({ task: taskParam, model: modelParam, thinkingLevel: thinkingLevelParam }),
 		execute: (_toolCallId, params, signal, onUpdate) =>
 			executor(params as { agent?: string; task: string; model?: string; thinkingLevel?: string }, signal, onUpdate as never),
+		renderCall: renderSubagentCall,
+		renderResult: renderSubagentResult,
 	});
 }
 
@@ -266,6 +269,8 @@ function toolDescription(discovery: AgentDiscovery): string {
 	);
 }
 
+const SUBAGENT_RENDERERS = { renderCall: renderSubagentCall, renderResult: renderSubagentResult } as const;
+
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		// Extension-wide cap (§R8.3): one scheduler per session, shared by every parallel
@@ -281,6 +286,7 @@ export default function (pi: ExtensionAPI) {
 			parameters: SubagentParams,
 			executionMode: "parallel",
 			execute: (_toolCallId, params, signal, onUpdate) => executor(params, signal, onUpdate),
+			...SUBAGENT_RENDERERS,
 		});
 	});
 }

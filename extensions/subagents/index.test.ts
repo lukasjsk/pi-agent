@@ -17,6 +17,22 @@ mock.module("typebox", () => ({
 
 installPlatformMock();
 
+// render.ts imports the platform's Text component; stub it so tests can assert on text.
+mock.module("@earendil-works/pi-tui", () => ({
+	Text: class {
+		text: string;
+		constructor(t = "") {
+			this.text = t;
+		}
+		setText(t: string) {
+			this.text = t;
+		}
+		render() {
+			return [this.text];
+		}
+	},
+}));
+
 const { createSubagentExecutor, renderResultText } = await import("./index.ts");
 const { parseAgentDefinition, UnknownAgentError } = await import("./definitions.ts");
 const { SpawnScheduler } = await import("./concurrency.ts");
@@ -543,4 +559,116 @@ test("the scout tool shares the deps object whose scheduler is assigned later (r
 	const result = await scoutTool.execute("c1", { task: "Recon." }); // threw before the fix
 	assert.equal(result.details.status, "completed");
 	assert.equal(lateDeps.scheduler.runningCount, 0, "the shared scheduler's slot is released");
+});
+
+// ---- §R10.5 TUI presentation ----
+
+const { excerpt, liveStatus, renderSubagentCall, renderSubagentResult } = await import("./render.ts");
+
+const theme = {
+	fg: (_c: string, t: string) => t,
+	bold: (t: string) => t,
+} as never as Parameters<typeof renderSubagentCall>[1];
+
+const settledDetails = {
+	status: "completed" as const,
+	report: "## Start Here\nutil.ts:1",
+	footer: {
+		openQuestions: [{ question: "Which style?", whyItMatters: "affects the API" }],
+		decisionPoints: [{ decision: "Used read-only tools", rationale: "scout is read-only" }],
+		filesTouched: [],
+	},
+	diagnostics: ["no JSON footer on the report"],
+	modelUsed: "github-copilot/gpt-5.6-terra",
+	requestedThinkingLevel: "low",
+	effectiveThinkingLevel: "low",
+	fallbackFrom: ["local-qwen38/x"],
+	overflowPath: "/tmp/pi-subagents/sess-1/scout-abc.md",
+};
+
+test("excerpt flattens and truncates", () => {
+	assert.equal(excerpt("  a\n\nb  ", 10), "a b");
+	assert.equal(excerpt("x".repeat(50), 48), `${"x".repeat(48)}…`);
+});
+
+test("liveStatus: queued notice vs running progress", () => {
+	assert.equal(liveStatus("queued — 2 spawn(s) ahead"), "queued");
+	assert.equal(liveStatus("tools: read · partial text"), "running");
+	assert.equal(liveStatus(undefined), "running");
+});
+
+test("collapsed result is one status line with role, elapsed, usage, and counts", () => {
+	const text = renderSubagentResult(
+		{
+			content: [{ type: "text", text: "body" }],
+			details: settledDetails,
+			usage: { input: 900, output: 300, cacheRead: 5000 },
+		},
+		{ expanded: false, isPartial: false },
+		theme,
+		{ state: { startedAt: Date.now() - 14_000 }, args: { agent: "scout", task: "Recon" } },
+	).text;
+	// strip ANSI for assertions
+	const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(plain, /^✓ completed · scout · 14s · 1\.2k tok/);
+	assert.match(plain, /1 decision\(s\), 1 question\(s\), 1 diagnostic\(s\)/);
+	assert.match(plain, /full report saved to \/tmp\/pi-subagents\/sess-1\/scout-abc\.md/);
+	assert.doesNotMatch(plain, /## Start Here/, "collapsed does not include the report body");
+});
+
+test("partial results render a live status line; queued state is visible", () => {
+	const running = renderSubagentResult(
+		{ details: { status: "running", progress: "tools: read · some streamed tail" } },
+		{ expanded: false, isPartial: true },
+		theme,
+		{ state: { startedAt: Date.now() - 3_000 }, args: { agent: "worker", task: "T" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(running, /^◦ running · worker · 3s · tools: read/);
+
+	const queued = renderSubagentResult(
+		{ details: { status: "running", progress: "queued — 2 spawn(s) ahead" } },
+		{ expanded: false, isPartial: true },
+		theme,
+		{ state: {}, args: { agent: "worker", task: "T" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(queued, /… queued · worker/);
+});
+
+test("expanded result renders body, decision points, open questions, provenance distinctly", () => {
+	const text = renderSubagentResult(
+		{ content: [{ type: "text", text: "in-context body" }], details: settledDetails, usage: { input: 900, output: 300 } },
+		{ expanded: true, isPartial: false },
+		theme,
+		{ state: { startedAt: Date.now() - 14_000 }, args: { agent: "scout", task: "Recon" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(text, /## Start Here\nutil\.ts:1/, "full report body from details");
+	assert.match(text, /Decision points\n  • Used read-only tools — scout is read-only/);
+	assert.match(text, /Open questions\n  \? Which style\? — affects the API/);
+	assert.match(text, /· model: github-copilot\/gpt-5\.6-terra/);
+	assert.match(text, /after fallback from local-qwen38\/x/);
+});
+
+test("renderCall is the static role · task-excerpt header and seeds elapsed timing", () => {
+	const state: Record<string, unknown> = {};
+	const first = renderSubagentCall({ agent: "scout", task: "Recon the repo." }, theme, { state });
+	assert.match(first.text.replace(/\x1b\[[0-9;]*m/g, ""), /^scout · "Recon the repo\."$/);
+	assert.equal(typeof state.startedAt, "number", "elapsed timing seeded on first call render");
+});
+
+test("failed and cancelled statuses render with distinct markers and diagnostics", () => {
+	const failed = renderSubagentResult(
+		{ details: { ...settledDetails, status: "failed", report: "" } },
+		{ expanded: false, isPartial: false },
+		theme,
+		{ state: {}, args: { agent: "scout", task: "x" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(failed, /^✗ failed · scout/);
+
+	const cancelled = renderSubagentResult(
+		{ details: { ...settledDetails, status: "cancelled", report: "partial" } },
+		{ expanded: false, isPartial: false },
+		theme,
+		{ state: {}, args: { agent: "scout", task: "x" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(cancelled, /^⊘ cancelled · scout/);
 });
