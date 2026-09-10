@@ -2,8 +2,9 @@
 // Tracer bullet (map #12 ticket #20): one tool, blocking, bundled worker/scout,
 // unknown agent = spawn error, progress relayed via onUpdate.
 // Later tickets add: full schema validation (#21), model fallback (#23), structured
-// output contract (#22), transport/overflow (#24), concurrency + Esc semantics (#25),
-// worker-side restricted tool (#26), TUI rendering (#27).
+// output contract (#22), transport/overflow (#24), concurrency + Esc semantics (#25 —
+// done: SpawnScheduler cap/queue, queued-Esc drain), worker-side restricted tool (#26),
+// TUI rendering (#27).
 
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -15,8 +16,11 @@ import { runSubagent, type SubagentResult } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
+import { DEFAULT_MAX_CONCURRENT, parseMaxConcurrent, SpawnScheduler } from "./concurrency.ts";
+import { EMPTY_FOOTER } from "./report.ts";
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to spawn." }),
@@ -54,6 +58,8 @@ export interface SubagentDeps {
 	overflowRoot: string;
 	/** Parent session id for the overflow path; absent in tests. */
 	getSessionId?: () => string | undefined;
+	/** Extension-wide spawn cap + queue (§R8.3–R8.4). Shared across all parallel tool calls. */
+	scheduler: SpawnScheduler;
 }
 
 /** Compose the tool result text: markdown body, structured fields, then extension-appended provenance.
@@ -139,19 +145,40 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
 
-		const result = await runSubagent({
-			definition,
-			task: params.task,
-			cwd: deps.cwd,
-			agentDir: deps.agentDir,
-			modelChain,
-			modelDiagnostics,
-			thinkingLevel: thinkingOverride as never,
+		const result = await deps.scheduler.run(
+			() =>
+				runSubagent({
+					definition,
+					task: params.task,
+					cwd: deps.cwd,
+					agentDir: deps.agentDir,
+					modelChain,
+					modelDiagnostics,
+					thinkingLevel: thinkingOverride as never,
+					signal,
+					onProgress: onUpdate
+						? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
+						: undefined,
+				}),
 			signal,
-			onProgress: onUpdate
-				? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
+			// Esc while queued: nothing ran, so the partial report is empty. The entry
+			// still returns a well-formed cancelled result (§R9.2), never a thrown error.
+			() => ({
+				status: "cancelled" as const,
+				report: "",
+				footer: { ...EMPTY_FOOTER },
+				diagnostics: [...modelDiagnostics, ...definition.warnings, "cancelled while queued; nothing ran"],
+				requestedThinkingLevel: thinkingOverride,
+			}),
+			// One-shot queued notice for the live rendering (§R10.5 queued state; #27 refines).
+			onUpdate && !signal?.aborted
+				? (ahead) =>
+						onUpdate({
+							content: [{ type: "text", text: `[${definition.name}] queued — ${ahead} spawn(s) ahead` }],
+							details: { status: "running", progress: `queued — ${ahead} spawn(s) ahead` },
+						})
 				: undefined,
-		});
+		);
 
 		// Result transport (§R8): the full payload always rides in details; an oversized
 		// in-context result also overflows to a session-scoped temp file that is referenced
@@ -194,7 +221,10 @@ function toolDescription(discovery: AgentDiscovery): string {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
-		const executor = createSubagentExecutor(makeDeps(ctx));
+		// Extension-wide cap (§R8.3): one scheduler per session, shared by every parallel
+		// subagent tool call. Config: ~/.pi/agent/configs/subagents.json { maxConcurrent }.
+		const scheduler = new SpawnScheduler(loadMaxConcurrent());
+		const executor = createSubagentExecutor({ ...makeDeps(ctx), scheduler });
 		pi.registerTool({
 			name: "subagent",
 			label: "Subagent",
@@ -225,4 +255,15 @@ function discoveryDirs() {
 		bundledDir: `${moduleDir}/agents`,
 		userDir: `${getAgentDir()}/agents`,
 	};
+}
+
+function loadMaxConcurrent(): number {
+	const configPath = `${getAgentDir()}/configs/subagents.json`;
+	let raw: string | undefined;
+	try {
+		raw = readFileSync(configPath, "utf8");
+	} catch {
+		raw = undefined;
+	}
+	return parseMaxConcurrent(raw) ?? DEFAULT_MAX_CONCURRENT;
 }

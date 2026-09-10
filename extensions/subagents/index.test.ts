@@ -19,6 +19,7 @@ installPlatformMock();
 
 const { createSubagentExecutor, renderResultText } = await import("./index.ts");
 const { parseAgentDefinition, UnknownAgentError } = await import("./definitions.ts");
+const { SpawnScheduler } = await import("./concurrency.ts");
 
 const scout = parseAgentDefinition(
 	"/x/scout.md",
@@ -39,6 +40,7 @@ const deps = {
 	cwd: "/repo",
 	agentDir: "/fake/agent-dir",
 	overflowRoot: "/fake/tmp",
+	scheduler: new SpawnScheduler(),
 };
 
 test("the executor resolves the agent and returns the child report with typed details", async () => {
@@ -293,4 +295,109 @@ test("a report under the cap arrives fully in-context with no overflow artifacts
 	const result = await execute({ agent: "scout", task: "Recon." }, undefined, undefined);
 	assert.equal((result.details as { overflowPath?: string }).overflowPath, undefined);
 	assert.doesNotMatch(result.content[0].text, /report overflowed to|full report saved to/);
+});
+
+/** Deferred prompt gate: the fake child session's prompt hangs until released. */
+function gatedPromptHook(): { releases: Array<() => void>; hook: (options: Record<string, unknown>) => Promise<{ session: unknown }> } {
+	const releases: Array<() => void> = [];
+	return {
+		releases,
+		hook: async () => ({
+			session: fakeSession({
+				prompt: () =>
+					new Promise<void>((resolve) => {
+						releases.push(resolve);
+					}),
+			}),
+		}),
+	};
+}
+
+test("excess concurrent spawns queue and start as slots free (§R8.3)", async () => {
+	const { releases, hook } = gatedPromptHook();
+	platformHooks.createAgentSession = hook;
+	const execute = createSubagentExecutor({ ...deps, scheduler: new SpawnScheduler(1) });
+
+	const first = execute({ agent: "scout", task: "First." }, undefined, undefined);
+	const second = execute({ agent: "scout", task: "Second." }, undefined, undefined);
+	await new Promise((r) => setTimeout(r, 0));
+	assert.equal(releases.length, 1, "cap 1 → only one child session created initially");
+
+	releases[0]();
+	await new Promise((r) => setTimeout(r, 0));
+	assert.equal(releases.length, 2, "the queued spawn started once the slot freed");
+	releases[1](); // let the second child finish
+	const [firstResult, secondResult] = await Promise.all([first, second]);
+	assert.equal(firstResult.details.status, "completed");
+	assert.equal(secondResult.details.status, "completed");
+});
+
+test("Esc while queued drains the queue with a cancelled result (§R8.4)", async () => {
+	const { releases, hook } = gatedPromptHook();
+	platformHooks.createAgentSession = hook;
+	const execute = createSubagentExecutor({ ...deps, scheduler: new SpawnScheduler(1) });
+
+	const controller = new AbortController();
+	const first = execute({ agent: "scout", task: "First." }, undefined, undefined);
+	const second = execute({ agent: "scout", task: "Second." }, controller.signal, undefined);
+	await new Promise((r) => setTimeout(r, 0));
+	assert.equal(releases.length, 1);
+
+	controller.abort(); // Esc: the queued child never runs
+	const secondResult = await second;
+	assert.equal(secondResult.details.status, "cancelled");
+	assert.match(secondResult.content[0].text, /\[cancelled\]/);
+	assert.match(secondResult.content[0].text, /cancelled while queued; nothing ran/);
+
+	releases[0](); // the running sibling is unaffected (§R9.1)
+	const firstResult = await first;
+	assert.equal(firstResult.details.status, "completed");
+});
+
+test("Esc cancels a running child with a partial result (§R8.4)", async () => {
+	const { releases, hook } = gatedPromptHook();
+	platformHooks.createAgentSession = hook;
+	const execute = createSubagentExecutor(deps);
+
+	const controller = new AbortController();
+	const running = execute({ agent: "scout", task: "Long task." }, controller.signal, undefined);
+	await new Promise((r) => setTimeout(r, 0));
+	assert.equal(releases.length, 1);
+
+	controller.abort();
+	const result = await running;
+	assert.equal(result.details.status, "cancelled");
+	assert.match(result.content[0].text, /cancelled before completion; partial report returned/);
+});
+
+test("an agent-error child reports failed without affecting a completed sibling (§R9.2)", async () => {
+	let call = 0;
+	platformHooks.createAgentSession = async () => {
+		call++;
+		if (call === 1) {
+			return {
+				session: fakeSession({
+					errorMessage: "stream setup error",
+					messages: [],
+				}),
+			};
+		}
+		return {
+			session: fakeSession({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "## Start Here\nREADME.md" }] }],
+			}),
+		};
+	};
+	const scheduler = new SpawnScheduler(4);
+	const execute = createSubagentExecutor({ ...deps, scheduler });
+
+	const [failed, completed] = await Promise.all([
+		execute({ agent: "scout", task: "Fails." }, undefined, undefined),
+		execute({ agent: "scout", task: "Works." }, undefined, undefined),
+	]);
+	assert.equal(failed.details.status, "failed");
+	assert.match(failed.content[0].text, /\[failed\]/);
+	assert.match(failed.content[0].text, /child run error: stream setup error/);
+	assert.equal(completed.details.status, "completed");
+	assert.equal(scheduler.runningCount, 0, "slots are released for both outcomes");
 });

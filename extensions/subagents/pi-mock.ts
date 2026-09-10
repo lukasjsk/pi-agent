@@ -31,6 +31,7 @@ export interface FakeSessionConfig {
 
 export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 	const listeners = new Set<(event: any) => void>();
+	const promptWaiters = new Set<() => void>();
 	const session: any = {
 		model: config.model ?? { provider: "test-provider", id: "test-model" },
 		thinkingLevel: config.thinkingLevel,
@@ -49,9 +50,13 @@ export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 		async abort() {
 			session.abortCount++;
 			session.aborted = true;
+			// Platform contract: abort() settles the in-flight prompt run.
+			for (const waiter of [...promptWaiters]) waiter();
+			promptWaiters.clear();
 		},
 		async prompt(task: string) {
-			await config.prompt?.(session);
+			const aborted = new Promise<void>((resolve) => promptWaiters.add(resolve));
+			await Promise.race([config.prompt?.(session), aborted]);
 		},
 		dispose() {
 			session.disposed = true;
