@@ -13,6 +13,7 @@
   - session-wide concurrency cap + queue via `~/.pi/agent/configs/subagents.json`
 - The earlier "needed to clarify" items are resolved in the spec (map #12): handovers via self-contained task briefs (§R6), structured result contract with open questions and decision points relayed to the user by the orchestrator (§R7), and plan persistence left to the prompt layer (§R6.3, §2).
 - Better UI for subagents (map #12, CONTEXT.md "Tool-call summary" / "Content line"): while a child runs, its tool calls show as one-line summary rows (`status marker · tool name · primary target`), the last three raw content lines of its generated text (per-line cap, `…` marker), the model in use, and a best-effort live cost; collapsed shows the recent tail, expanded everything. The platform wraps tool rows in a box, so no custom styling was needed.
+- Footer reflects subagent costs (map #12, ticket #34, research doc §6): subagent tool results return the child's total session usage, the custom footer folds tool-result usage into its totals, and the cost segment shows a per-child breakdown by agent name (`W:`/`S:`).
 
 ## Planned
 
@@ -22,4 +23,3 @@
 - Integrate workflow with Confluence — read documents as part of the initial context.
 - `researcher` might have access to Confluence and Jira to search for similar stories.
 - Scout should be able to explore git history of files for additional context (needs an implementation that does not burn through tokens).
-- Fix footer to display costs that would reflect our new subagents extension.

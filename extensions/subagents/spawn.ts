@@ -48,8 +48,21 @@ export interface SubagentActivity {
 
 export type SubagentStatus = "completed" | "failed" | "cancelled";
 
+/** pi-ai `Usage`-shaped totals from the child's getSessionStats(). Cost components other
+ *  than `total` are unavailable at session granularity and are reported as 0. */
+export interface ChildUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+
 export interface SubagentResult {
 	status: SubagentStatus;
+	/** The agent definition's name; lets the footer attribute cost per child role. */
+	agent: string;
 	/** The child's final report text (partial on cancel, streamed-so-far on failure). */
 	report: string;
 	/** Parsed structured-output footer (§R7); empty fields on degradation. */
@@ -63,6 +76,9 @@ export interface SubagentResult {
 	effectiveThinkingLevel?: string;
 	/** §R8: set when the report overflowed to a temp file referenced in the in-context result. */
 	overflowPath?: string;
+	/** Total child-session usage (assistant messages + nested tool results), from getSessionStats();
+	 *  returned on the tool result so /session, RPC, and the footer reflect it (research doc §6). */
+	usage?: ChildUsage;
 }
 
 export interface SpawnRunOptions {
@@ -285,23 +301,27 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 		const status: SubagentStatus = aborted ? "cancelled" : errorMessage ? "failed" : "completed";
 		return {
 			status,
+			agent: definition.name,
 			report: parsed.result,
 			footer: parsed.footer,
 			diagnostics: attemptDiagnostics,
 			modelUsed,
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
+			usage: childUsage(session),
 		};
 	} catch (error) {
 		attemptDiagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
 		return {
 			status: "failed",
+			agent: definition.name,
 			report: streamed,
 			footer: { openQuestions: [], decisionPoints: [], filesTouched: [] },
 			diagnostics: attemptDiagnostics,
 			modelUsed: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
+			usage: childUsage(session),
 		};
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
@@ -313,6 +333,23 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 /** The session's thinking level is post-clamp (effective); absent on mocked/partial sessions. */
 function effectiveThinkingLevel(session: { thinkingLevel?: unknown }): string | undefined {
 	return typeof session.thinkingLevel === "string" ? session.thinkingLevel : undefined;
+}
+
+/** Total child usage, read once after the run (before dispose); mirrors /session + RPC
+ *  accounting (research doc §6). Absent on mocked sessions without getSessionStats(). */
+function childUsage(session: {
+	getSessionStats?: () => { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number };
+}): ChildUsage | undefined {
+	const stats = session.getSessionStats?.();
+	if (!stats) return undefined;
+	return {
+		input: stats.tokens.input,
+		output: stats.tokens.output,
+		cacheRead: stats.tokens.cacheRead,
+		cacheWrite: stats.tokens.cacheWrite,
+		totalTokens: stats.tokens.total,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: stats.cost },
+	};
 }
 
 /** The last assistant message with non-empty text is the child's report. */

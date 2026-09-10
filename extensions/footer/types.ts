@@ -90,10 +90,8 @@ export interface UsageStats {
 }
 
 export interface SubagentCosts {
-  explorer?: number;
-  planner?: number;
-  implementer?: number;
-  reviewer?: number;
+  /** Keyed by the child's agent definition name (worker, scout, user-defined). */
+  [agent: string]: number | undefined;
 }
 
 // Provider-qualified usage data. Add provider-specific variants here as new

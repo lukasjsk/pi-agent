@@ -18,7 +18,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
-import { runSubagent, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
+import { runSubagent, type ChildUsage, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
@@ -166,7 +166,7 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 		params: { agent?: string; task: string; model?: string; thinkingLevel?: string },
 		signal: AbortSignal | undefined,
 		onUpdate: ((partial: { content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }) => void) | undefined,
-	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }> {
+	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails; usage?: ChildUsage }> {
 		let definition: AgentDefinition;
 		try {
 			definition = deps.resolveAgent(fixedAgent ?? params.agent!);
@@ -260,7 +260,9 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 		}
 
 		const text = renderResultText(result, { overflowPath });
-		return { content: [{ type: "text", text }], details: { status: result.status, ...result } };
+		// usage rides the tool result: /session, RPC, and the footer sum it automatically
+		// (built-in footer.js, agent-session.js getSessionStats — research doc §6).
+		return { content: [{ type: "text", text }], details: { status: result.status, ...result }, usage: result.usage };
 	};
 }
 

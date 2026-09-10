@@ -92,6 +92,32 @@ test("progress flows through onUpdate prefixed with the agent role", async () =>
 	assert.match(updates[0].content[0].text, /^\[scout\] tools: read/);
 });
 
+test("child usage rides the tool result from getSessionStats (research doc §6)", async () => {
+	platformHooks.createAgentSession = async () => ({
+		session: fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+			stats: {
+				tokens: { input: 100, output: 50, cacheRead: 200, cacheWrite: 10, total: 360 },
+				cost: 0.0123,
+			},
+		}),
+	});
+
+	const execute = createSubagentExecutor(deps);
+	const result = await execute({ agent: "scout", task: "x" }, undefined, undefined);
+
+	assert.deepEqual(result.usage, {
+		input: 100,
+		output: 50,
+		cacheRead: 200,
+		cacheWrite: 10,
+		totalTokens: 360,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0123 },
+	});
+	// The details payload carries the agent name the footer attributes cost by.
+	assert.equal((result.details as { agent?: string }).agent, "scout");
+});
+
 test("a failed child surfaces status and diagnostics in the result", async () => {
 	platformHooks.createAgentSession = async () => ({
 		session: fakeSession({

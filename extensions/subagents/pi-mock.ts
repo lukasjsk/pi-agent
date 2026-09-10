@@ -16,11 +16,13 @@ export interface FakeSession {
 	aborted: boolean;
 	abortCount: number;
 	disposed: boolean;
+	stats: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number } | undefined;
 	subscribe(cb: (event: any) => void): () => void;
 	emit(event: unknown): void;
 	abort(): Promise<void>;
 	prompt(task: string): Promise<void>;
 	dispose(): void;
+	getSessionStats?(): { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number };
 }
 
 export interface FakeSessionConfig {
@@ -28,6 +30,8 @@ export interface FakeSessionConfig {
 	model?: { provider: string; id: string } | undefined;
 	thinkingLevel?: string;
 	errorMessage?: string;
+	/** Session totals returned by getSessionStats() (child usage capture). */
+	stats?: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number };
 	prompt?: (session: FakeSession) => Promise<void>;
 }
 
@@ -42,6 +46,8 @@ export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 		aborted: false,
 		abortCount: 0,
 		disposed: false,
+		stats: config.stats,
+		getSessionStats: config.stats ? () => session.stats! : undefined,
 		subscribe(cb: (event: any) => void) {
 			listeners.add(cb);
 			return () => listeners.delete(cb);
