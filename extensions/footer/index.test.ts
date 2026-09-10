@@ -10,10 +10,9 @@ mockPiCodingAgent();
 
 const refreshedContexts: ExtensionContext[] = [];
 
-mock.module("@earendil-works/pi-tui", () => ({
-  visibleWidth: (text: string) => text.length,
-  truncateToWidth: (text: string) => text,
-}));
+import { installPiTuiMock } from "../test/pi-mock.ts";
+
+installPiTuiMock();
 
 mock.module("./copilot-usage.js", () => ({
   refreshCopilotUsageStatistics: async (ctx: ExtensionContext) => {

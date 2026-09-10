@@ -27,6 +27,11 @@ export const piCodingAgentMock = {
   },
 };
 
+import { installPiCodingAgentMock } from "../test/pi-mock.ts";
+
+/** Back-compat wrapper: registers the shared repo-wide mock (see extensions/test/pi-mock.ts).
+ *  The historical minimal shape lived here; it now lives in the shared module so suites
+ *  cannot poison each other's process-global bun mocks. */
 export function mockPiCodingAgent(): void {
-  mock.module("@earendil-works/pi-coding-agent", () => piCodingAgentMock);
+  installPiCodingAgentMock();
 }

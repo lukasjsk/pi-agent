@@ -1,10 +1,12 @@
-// Shared mock of @earendil-works/pi-coding-agent for subagents tests.
-// The real package resolves when Pi loads the extension, but not from this
-// repository — mirror footer/pi-mock.ts. Bun's module mock registry is shared
-// across test files in the same process, so every mock registers the same
-// shape; per-test behavior is injected through platformHooks.
+// Mock of @earendil-works/pi-coding-agent for subagents tests. The real package
+// resolves when Pi loads the extension, but not from this repository — the mock now
+// lives in the shared extensions/test/pi-mock.ts (one repo-wide shape; suites cannot
+// poison each other's process-global bun mocks). Per-test behavior via platformHooks.
 
-import { mock } from "bun:test";
+import { installPiCodingAgentMock, platformHooks } from "../test/pi-mock.ts";
+
+// Re-exported so tests configure the SAME hooks object the shared mock consults.
+export { platformHooks };
 
 export interface FakeSession {
 	model: { provider: string; id: string } | undefined;
@@ -65,32 +67,11 @@ export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 	return session as FakeSession;
 }
 
-/** Per-test hooks consulted by the registered mock. */
-export const platformHooks: {
-	createAgentSession: (options: Record<string, unknown>) => Promise<{ session: FakeSession }>;
-} = {
-	createAgentSession: async () => {
-		throw new Error("platformHooks.createAgentSession not configured for this test");
-	},
-};
+/** Per-test hooks are owned by the shared mock module (extensions/test/pi-mock.ts). */
 
 /** Call once per test file, before dynamically importing modules that import the pi package. */
 export function installPlatformMock(): void {
-	mock.module("@earendil-works/pi-coding-agent", () => ({
-		createAgentSession: (options: Record<string, unknown>) => platformHooks.createAgentSession(options),
-		defineTool: (tool: unknown) => tool,
-		DefaultResourceLoader: class {
-			options: Record<string, unknown>;
-			constructor(options: Record<string, unknown>) {
-				this.options = options;
-			}
-			async reload() {}
-		},
-		SessionManager: {
-			inMemory: (cwd?: string) => ({ kind: "inMemory", cwd }),
-		},
-		getAgentDir: () => "/fake/agent-dir",
-	}));
+	installPiCodingAgentMock();
 }
 
 /** Convenience event emitters matching the platform's event shapes (sdk.md "Events"). */

@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { join } from "node:path";
 
 import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart } from "./pi-mock.ts";
+import { installPiTuiMock } from "../test/pi-mock.ts";
 
 // typebox is only resolvable under Pi's module aliases, not from this repo.
 mock.module("typebox", () => ({
@@ -16,22 +17,7 @@ mock.module("typebox", () => ({
 }));
 
 installPlatformMock();
-
-// render.ts imports the platform's Text component; stub it so tests can assert on text.
-mock.module("@earendil-works/pi-tui", () => ({
-	Text: class {
-		text: string;
-		constructor(t = "") {
-			this.text = t;
-		}
-		setText(t: string) {
-			this.text = t;
-		}
-		render() {
-			return [this.text];
-		}
-	},
-}));
+installPiTuiMock();
 
 const { createSubagentExecutor, renderResultText } = await import("./index.ts");
 const { parseAgentDefinition, UnknownAgentError } = await import("./definitions.ts");
