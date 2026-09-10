@@ -9,12 +9,13 @@ mock.module("typebox", () => ({
 	Type: {
 		Object: (properties: unknown) => ({ type: "object", properties }),
 		String: (options: unknown = {}) => ({ type: "string", ...(options as object) }),
+		Optional: (schema: unknown) => schema,
 	},
 }));
 
 installPlatformMock();
 
-const { createSubagentExecutor } = await import("./index.ts");
+const { createSubagentExecutor, renderResultText } = await import("./index.ts");
 const { parseAgentDefinition, UnknownAgentError } = await import("./definitions.ts");
 
 const scout = parseAgentDefinition(
@@ -29,6 +30,10 @@ const deps = {
 		throw new UnknownAgentError(`Unknown agent "${name}". Valid agents: scout`);
 	},
 	getModel: () => undefined,
+	getModelRegistry: () => ({
+		find: (provider: string, id: string) => ({ provider, id }) as unknown, // every well-formed ref resolves
+		getAvailable: () => [], // no auth pre-filter in this stub
+	}),
 	cwd: "/repo",
 	agentDir: "/fake/agent-dir",
 };
@@ -140,6 +145,78 @@ test("a degraded footer keeps status completed and warns in diagnostics", async 
 	assert.equal(result.details.status, "completed");
 	assert.match(result.content[0].text, /\[?completed|body/);
 	assert.match(result.content[0].text, /Diagnostics:\n- unparseable JSON footer/);
+});
+
+test("a per-spawn model override reaches the child session (§R4.4)", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession({ messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] }) };
+	};
+
+	const execute = createSubagentExecutor(deps);
+	await execute({ agent: "scout", task: "x", model: "custom/override-model" }, undefined, undefined);
+
+	assert.deepEqual(lastCaptured(captured).model, { provider: "custom", id: "override-model" });
+});
+
+test("a definition fallback list resolves through the registry with skip diagnostics in the result", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession({ messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] }) };
+	};
+	const registryDeps = {
+		...deps,
+		resolveAgent: (name: string) => ({
+			...scout,
+			model: ["ghost/none", "b/usable"],
+		}) as typeof scout,
+		getModelRegistry: () => ({
+			find: (provider: string, id: string) => (provider === "b" ? { provider, id } : undefined),
+			getAvailable: () => [{ provider: "b", id: "usable" }],
+		}),
+	};
+
+	const execute = createSubagentExecutor(registryDeps);
+	const result = await execute({ agent: "scout", task: "x" }, undefined, undefined);
+
+	assert.deepEqual(lastCaptured(captured).model, { provider: "b", id: "usable" });
+	assert.match(result.content[0].text, /skipped ghost\/none \(not in the model catalogue\)/);
+});
+
+test("an override that the registry does not know is a spawn error", async () => {
+	const noSuchModel = {
+		...deps,
+		getModelRegistry: () => ({ find: () => undefined, getAvailable: () => [] }),
+	};
+	const execute = createSubagentExecutor(noSuchModel);
+	await assert.rejects(
+		execute({ agent: "scout", task: "x", model: "ghost/missing" }, undefined, undefined),
+		/model "ghost\/missing" not found in the model registry/,
+	);
+});
+
+const lastCaptured = (captured: Array<Record<string, unknown>>) => captured[captured.length - 1];
+
+test("an invalid thinkingLevel param fails the spawn fast", async () => {
+	const execute = createSubagentExecutor(deps);
+	await assert.rejects(
+		execute({ agent: "scout", task: "x", thinkingLevel: "ultra" }, undefined, undefined),
+		/Invalid thinkingLevel "ultra"/,
+	);
+});
+
+test("provenance renders fallback origin when a retry occurred (§R9.3)", () => {
+	const text = renderResultText({
+		status: "completed",
+		report: "done",
+		footer: { openQuestions: [], decisionPoints: [], filesTouched: [] },
+		diagnostics: [],
+		modelUsed: "b/backup",
+		fallbackFrom: ["a/primary"],
+	});
+	assert.match(text, /model: b\/backup \(after fallback from a\/primary\)/);
 });
 
 test("the session_start handler registers the subagent tool with a description built from discovery", async () => {

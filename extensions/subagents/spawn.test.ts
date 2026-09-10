@@ -145,8 +145,115 @@ test("passes the requested model through to the child", async () => {
 		return { session: fakeSession() };
 	};
 	const model = { provider: "anthropic", id: "claude-opus-4-5" };
-	await runSubagent({ ...baseOptions, model: model as never });
+	await runSubagent({ ...baseOptions, modelChain: [model] });
 	assert.deepEqual(lastCaptured(captured).model, model);
+});
+
+test("a runtime failure on the first chain entry retries the same task on the next (§R4.2)", async () => {
+	const capturedModels: Array<unknown> = [];
+	platformHooks.createAgentSession = async (options) => {
+		capturedModels.push(options.model);
+		const isPrimary = (options.model as { id: string }).id === "primary";
+		return {
+			session: fakeSession(
+				isPrimary
+					? { errorMessage: "all retries exhausted", messages: [], model: { provider: "a", id: "primary" } }
+					: {
+						messages: [{ role: "assistant", content: [{ type: "text", text: "report from fallback" }] }],
+						model: { provider: "b", id: "backup" },
+					},
+			),
+		};
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [
+			{ provider: "a", id: "primary" },
+			{ provider: "b", id: "backup" },
+		],
+	});
+
+	assert.deepEqual(capturedModels, [
+		{ provider: "a", id: "primary" },
+		{ provider: "b", id: "backup" },
+	]);
+	assert.equal(result.status, "completed");
+	assert.equal(result.report, "report from fallback");
+	assert.equal(result.modelUsed, "b/backup");
+	assert.deepEqual(result.fallbackFrom, ["a/primary"]);
+	assert.ok(
+		result.diagnostics.some((d) => /runtime failure on a\/primary.*retrying on b\/backup/.test(d)),
+		"fallback transition is noted in diagnostics",
+	);
+	assert.ok(result.diagnostics.some((d) => /all retries exhausted/.test(d)), "per-candidate failure info kept");
+});
+
+test("an exhausted chain returns a failed result with per-candidate info — no silent fallback (§R4.3)", async () => {
+	const attempts: string[] = [];
+	platformHooks.createAgentSession = async (options) => {
+		attempts.push((options.model as { id: string }).id);
+		const id = (options.model as { id: string }).id;
+		return { session: fakeSession({ errorMessage: `provider ${id} down`, model: { provider: id === "one" ? "a" : "b", id } }) };
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [
+			{ provider: "a", id: "one" },
+			{ provider: "b", id: "two" },
+		],
+	});
+
+	assert.deepEqual(attempts, ["one", "two"], "each chain entry was tried once");
+	assert.equal(result.status, "failed");
+	assert.equal(result.modelUsed, "b/two");
+	assert.deepEqual(result.fallbackFrom, ["a/one"]);
+	assert.ok(result.diagnostics.some((d) => /provider one down/.test(d)));
+	assert.ok(result.diagnostics.some((d) => /provider two down/.test(d)));
+	assert.ok(result.diagnostics.some((d) => /runtime failure on a\/one.*retrying on b\/two/.test(d)));
+});
+
+test("a cancelled child does not trigger a fallback retry", async () => {
+	let createCalls = 0;
+	const controller = new AbortController();
+	platformHooks.createAgentSession = async () => {
+		createCalls++;
+		return {
+			session: fakeSession({
+				prompt: async (s) => {
+					textDelta(s, "partial");
+					while (!s.aborted) await new Promise((resolve) => setTimeout(resolve, 5));
+				},
+			}),
+		};
+	};
+
+	const run = runSubagent({
+		...baseOptions,
+		modelChain: [
+			{ provider: "a", id: "one" },
+			{ provider: "b", id: "two" },
+		],
+		signal: controller.signal,
+	});
+	setTimeout(() => controller.abort(), 20);
+	const result = await run;
+
+	assert.equal(result.status, "cancelled");
+	assert.equal(createCalls, 1, "no second attempt after cancellation");
+	assert.equal(result.fallbackFrom, undefined);
+});
+
+test("a per-spawn thinkingLevel override rides the run and provenance", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession() };
+	};
+	const result = await runSubagent({ ...baseOptions, thinkingLevel: "high" });
+	assert.equal(lastCaptured(captured).thinkingLevel, "high");
+	assert.equal(result.requestedThinkingLevel, "high");
 });
 
 test("passes the definition's thinkingLevel to the child session", async () => {

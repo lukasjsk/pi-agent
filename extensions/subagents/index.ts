@@ -9,9 +9,10 @@ import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { discoverAgents, resolveAgent, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
+import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
 import { runSubagent, type SubagentResult } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
+import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to spawn." }),
@@ -20,6 +21,19 @@ const SubagentParams = Type.Object({
 			"Self-contained brief for the subagent. This is the entire context the child receives — " +
 			"include everything it needs (goal, relevant file paths, excerpts of prior results).",
 	}),
+	model: Type.Optional(
+		Type.String({
+			description:
+				'Leave unset unless the user explicitly requests a specific model. When set, a "provider/model-id" ' +
+				'(e.g. "github-copilot/gpt-5.6-terra") replaces the agent\'s configured model fallback list entirely.',
+		}),
+	),
+	thinkingLevel: Type.Optional(
+		Type.String({
+			description: `Leave unset unless the user explicitly asks for a thinking level. ` +
+				`When set, one of: ${THINKING_LEVELS.join(" | ")}; clamped to the model's capabilities by the platform.`,
+		}),
+	),
 });
 
 export type SubagentToolDetails =
@@ -28,7 +42,8 @@ export type SubagentToolDetails =
 
 export interface SubagentDeps {
 	resolveAgent: (name: string) => AgentDefinition;
-	getModel: () => unknown; // parent's current model (platform Model); unknown in tests
+	getModel: () => unknown; // parent's current model (platform Model); undefined in tests
+	getModelRegistry: () => ModelRegistryLike | undefined; // ctx.modelRegistry; undefined in tests
 	cwd: string;
 	agentDir: string;
 }
@@ -44,7 +59,10 @@ export function renderResultText(result: SubagentResult): string {
 	if (fields) parts.push(fields);
 
 	const provenance: string[] = [];
-	if (result.modelUsed) provenance.push(`model: ${result.modelUsed}`);
+	if (result.modelUsed) {
+		const fallback = result.fallbackFrom?.length ? ` (after fallback from ${result.fallbackFrom.join(", ")})` : "";
+		provenance.push(`model: ${result.modelUsed}${fallback}`);
+	}
 	if (result.requestedThinkingLevel || result.effectiveThinkingLevel) {
 		const requested = result.requestedThinkingLevel ?? "(none)";
 		const effective = result.effectiveThinkingLevel ?? "(unknown)";
@@ -65,7 +83,7 @@ ${result.diagnostics.map((d) => `- ${d}`).join("\n")}`);
 /** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O). */
 export function createSubagentExecutor(deps: SubagentDeps) {
 	return async function execute(
-		params: { agent: string; task: string },
+		params: { agent: string; task: string; model?: string; thinkingLevel?: string },
 		signal: AbortSignal | undefined,
 		onUpdate: ((partial: { content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }) => void) | undefined,
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }> {
@@ -76,12 +94,38 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
 
+		const overrideModel = params.model?.trim() || undefined;
+		const thinkingOverride = params.thinkingLevel?.trim() || undefined;
+		if (thinkingOverride !== undefined && !THINKING_LEVELS.includes(thinkingOverride as never)) {
+			throw new Error(
+				`Invalid thinkingLevel "${thinkingOverride}". Valid levels: ${THINKING_LEVELS.join(" | ")}`,
+			);
+		}
+
+		// Model fallback pipeline (§R4): resolve the ordered chain before spawning.
+		let modelChain;
+		let modelDiagnostics: string[] = [];
+		try {
+			const resolved = resolveModelChain({
+				definitionModel: definition.model,
+				overrideModel,
+				parentModel: deps.getModel(),
+				registry: deps.getModelRegistry(),
+			});
+			modelChain = resolved.chain;
+			modelDiagnostics = resolved.diagnostics;
+		} catch (error) {
+			throw new Error(error instanceof Error ? error.message : String(error));
+		}
+
 		const result = await runSubagent({
 			definition,
 			task: params.task,
 			cwd: deps.cwd,
 			agentDir: deps.agentDir,
-			model: deps.getModel() as never,
+			modelChain,
+			modelDiagnostics,
+			thinkingLevel: thinkingOverride as never,
 			signal,
 			onProgress: onUpdate
 				? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
@@ -128,6 +172,7 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 	return {
 		resolveAgent: (name) => resolveAgent(discoverAgents(discoveryDirs()), name),
 		getModel: () => ctx.model,
+		getModelRegistry: () => ctx.modelRegistry as ModelRegistryLike | undefined,
 		cwd: ctx.cwd,
 		agentDir: getAgentDir(),
 	};

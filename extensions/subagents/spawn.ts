@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition, AgentThinkingLevel } from "./definitions.ts";
 import { parseStructuredReport, type StructuredFooter } from "./report.ts";
+import { refId, type ModelRef } from "./models.ts";
 
 export type SubagentStatus = "completed" | "failed" | "cancelled";
 
@@ -43,8 +44,13 @@ export interface SpawnRunOptions {
 	cwd: string;
 	/** Override for tests; defaults to getAgentDir(). */
 	agentDir?: string;
-	/** Model for the child; undefined lets the platform resolve from settings (fallback pipeline is ticket #23). */
-	model?: Model;
+	/** Resolved chain (§R4); empty/undefined lets the platform resolve from settings.
+	 *  On a runtime failure the next entry retries the same task (partial progress discarded). */
+	modelChain?: readonly (ModelRef | undefined)[];
+	/** Skip notes from chain resolution (unauthed/uncatalogued entries). */
+	modelDiagnostics?: string[];
+	/** Requested thinking level (per-spawn override ?? definition); the platform clamps per model. */
+	thinkingLevel?: AgentThinkingLevel;
 	signal?: AbortSignal;
 	/** Progress relay into the tool call's live rendering via onUpdate. */
 	onProgress?: (text: string) => void;
@@ -67,7 +73,7 @@ export function validateToolNames(definition: AgentDefinition): void {
 const PROGRESS_TAIL_CHARS = 300;
 
 export async function runSubagent(options: SpawnRunOptions): Promise<SubagentResult> {
-	const { definition, task, cwd, signal, onProgress } = options;
+	const { definition, cwd, signal } = options;
 	validateToolNames(definition);
 	const agentDir = options.agentDir ?? getAgentDir();
 
@@ -82,18 +88,63 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 	});
 	await loader.reload();
 
+	const thinkingLevel = options.thinkingLevel ?? definition.thinkingLevel;
+	const diagnostics: string[] = [...(options.modelDiagnostics ?? []), ...definition.warnings];
+	const fallbackFrom: string[] = [];
+
+	// One attempt per chain entry; an empty chain is a single platform-default attempt.
+	const chain: readonly (ModelRef | undefined)[] =
+		options.modelChain && options.modelChain.length > 0 ? options.modelChain : [undefined];
+
+	for (let attempt = 0; attempt < chain.length; attempt++) {
+		const model = chain[attempt];
+		const result = await runOnce({ options, agentDir, loader, model, thinkingLevel });
+		for (const d of result.diagnostics) {
+			if (!diagnostics.includes(d)) diagnostics.push(d); // retry attempts repeat footer warnings; keep once
+		}
+		const hasNext = attempt < chain.length - 1;
+
+		if (result.status === "failed" && hasNext) {
+			// Runtime failure mid-task: discard partial progress, retry on the next entry (§R4.2).
+			const failedOn = model ? refId(model) : "the platform default model";
+			const nextOn = chain[attempt + 1] ? refId(chain[attempt + 1]!) : "the platform default model";
+			diagnostics.push(`runtime failure on ${failedOn}; partial progress discarded, retrying on ${nextOn}`);
+			fallbackFrom.push(model ? refId(model) : "platform default");
+			continue;
+		}
+
+		return {
+			...result,
+			diagnostics,
+			fallbackFrom: fallbackFrom.length > 0 ? fallbackFrom : undefined,
+		};
+	}
+	throw new Error("unreachable: model chain loop must return");
+}
+
+interface RunOnceArgs {
+	options: SpawnRunOptions;
+	agentDir: string;
+	loader: DefaultResourceLoader;
+	model: ModelRef | undefined;
+	thinkingLevel: AgentThinkingLevel | undefined;
+}
+
+/** One attempt: a fresh isolated child session on one model. */
+async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
+	const { options, agentDir, loader, model, thinkingLevel } = args;
+	const { definition, task, cwd, signal, onProgress } = options;
+
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
 		tools: definition.tools,
-		model: options.model,
-		thinkingLevel: definition.thinkingLevel, // platform clamps to model capabilities (spec §R2.2)
+		model: model as Model | undefined,
+		thinkingLevel, // platform clamps to model capabilities; re-clamps on fallback switch (§R9.4)
 		resourceLoader: loader,
 		sessionManager: SessionManager.inMemory(cwd),
 	});
 
-	// Definition-level warnings (unknown fields, etc.) ride the spawn's diagnostics.
-	const diagnostics: string[] = [...definition.warnings];
 	let streamed = "";
 	const activity: string[] = [];
 	const emitProgress = () => {
@@ -102,7 +153,6 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 		const tail = streamed.slice(-PROGRESS_TAIL_CHARS);
 		onProgress(`${toolNames ? `tools: ${toolNames} · ` : ""}${tail}`);
 	};
-
 	const unsubscribe = session.subscribe((event) => {
 		if (event.type === "message_update") {
 			if (event.assistantMessageEvent.type === "text_delta") {
@@ -122,42 +172,43 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 	};
 	signal?.addEventListener("abort", onAbort, { once: true });
 
+	const attemptDiagnostics: string[] = [];
 	try {
 		await session.prompt(task);
 
 		const errorMessage = session.agent.state.errorMessage;
 		if (errorMessage) {
-			diagnostics.push(`child run error: ${errorMessage}`);
+			attemptDiagnostics.push(`child run error: ${errorMessage}`);
 		}
 		const aborted = signal?.aborted === true;
 		if (aborted) {
-			diagnostics.push("cancelled before completion; partial report returned");
+			attemptDiagnostics.push("cancelled before completion; partial report returned");
 		}
 		const modelUsed = session.model ? `${session.model.provider}/${session.model.id}` : undefined;
 		const rawReport = extractFinalText(session) || streamed;
 		// Structured output contract (§R7): parse the footer off the report; degradation is a
 		// warning in diagnostics — a child is never failed for format alone.
 		const parsed = parseStructuredReport(rawReport);
-		if (parsed.warning) diagnostics.push(parsed.warning);
+		if (parsed.warning) attemptDiagnostics.push(parsed.warning);
 		const status: SubagentStatus = aborted ? "cancelled" : errorMessage ? "failed" : "completed";
 		return {
 			status,
 			report: parsed.result,
 			footer: parsed.footer,
-			diagnostics,
+			diagnostics: attemptDiagnostics,
 			modelUsed,
-			requestedThinkingLevel: definition.thinkingLevel,
+			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
 		};
 	} catch (error) {
-		diagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
+		attemptDiagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
 		return {
 			status: "failed",
 			report: streamed,
 			footer: { openQuestions: [], decisionPoints: [], filesTouched: [] },
-			diagnostics,
+			diagnostics: attemptDiagnostics,
 			modelUsed: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
-			requestedThinkingLevel: definition.thinkingLevel,
+			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
 		};
 	} finally {
