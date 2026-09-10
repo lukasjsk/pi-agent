@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mock } from "bun:test";
+import { Buffer } from "node:buffer";
+import { join } from "node:path";
 
 import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart } from "./pi-mock.ts";
 
@@ -36,6 +38,7 @@ const deps = {
 	}),
 	cwd: "/repo",
 	agentDir: "/fake/agent-dir",
+	overflowRoot: "/fake/tmp",
 };
 
 test("the executor resolves the agent and returns the child report with typed details", async () => {
@@ -241,4 +244,53 @@ test("the session_start handler registers the subagent tool with a description b
 	assert.equal(tool.executionMode, "parallel");
 	assert.match(String(tool.description), /scout: Exploration agent/);
 	assert.match(String(tool.description), /worker: General-purpose implementation agent/);
+});
+
+test("an oversized report overflows to a file and the in-context copy is truncated with its path (§R8)", async () => {
+	const fs = await import("node:fs/promises");
+	const os = await import("node:os");
+	const overflowRoot = await fs.mkdtemp(join(await os.tmpdir(), "subagents-test-"));
+	try {
+	const bigReport = `# Big report\n${"detail line\n".repeat(1500)}`; // well over 10KB
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: bigReport }] }],
+		});
+		return { session };
+	};
+
+	const execute = createSubagentExecutor({ ...deps, overflowRoot, getSessionId: () => "sess-abc" });
+	const result = await execute({ agent: "scout", task: "Recon." }, undefined, undefined);
+
+	const text = result.content[0].text;
+	assert.ok(Buffer.byteLength(text, "utf8") <= 10 * 1024, "in-context text must respect the 10KB cap");
+	const overflowPath = (result.details as { overflowPath?: string }).overflowPath;
+	assert.ok(overflowPath, "details must carry the overflow path");
+	assert.match(overflowPath!, /\/pi-subagents\/sess-abc\/scout-[0-9a-f]{8}\.md$/);
+	assert.match(text, new RegExp(overflowPath!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	assert.match(text, /full report saved to/);
+	assert.ok(!text.includes("detail line\n".repeat(1400)), "body must be truncated in context");
+
+	const file = await fs.readFile(overflowPath!, "utf8");
+	assert.ok(file.includes("detail line\n".repeat(1000)), "the overflow file contains the FULL report");
+	assert.ok(file.includes("Provenance (extension-appended):"));
+	assert.match(result.content[0].text, /report overflowed to/);
+	assert.equal((result.details as { report: string }).report, bigReport.trim(), "details carry the complete payload for replay");
+	} finally {
+		await fs.rm(overflowRoot, { recursive: true, force: true });
+	}
+});
+
+test("a report under the cap arrives fully in-context with no overflow artifacts", async () => {
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "## Start Here\nREADME.md" }] }],
+		});
+		return { session };
+	};
+
+	const execute = createSubagentExecutor(deps);
+	const result = await execute({ agent: "scout", task: "Recon." }, undefined, undefined);
+	assert.equal((result.details as { overflowPath?: string }).overflowPath, undefined);
+	assert.doesNotMatch(result.content[0].text, /report overflowed to|full report saved to/);
 });

@@ -8,11 +8,15 @@
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
 import { runSubagent, type SubagentResult } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
+import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
+import { Buffer } from "node:buffer";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to spawn." }),
@@ -46,18 +50,24 @@ export interface SubagentDeps {
 	getModelRegistry: () => ModelRegistryLike | undefined; // ctx.modelRegistry; undefined in tests
 	cwd: string;
 	agentDir: string;
+	/** Root for §R8 overflow files (defaults to the OS temp dir). */
+	overflowRoot: string;
+	/** Parent session id for the overflow path; absent in tests. */
+	getSessionId?: () => string | undefined;
 }
 
-/** Compose the tool result text: markdown body, structured fields, then extension-appended provenance. */
-export function renderResultText(result: SubagentResult): string {
+/** Compose the tool result text: markdown body, structured fields, then extension-appended provenance.
+ *
+ * With `overflowPath` set, an oversized result keeps the structured fields, provenance, and
+ * diagnostics fully in-context while the report body is truncated to fit §R8's cap, with the
+ * overflow path referenced. Without it, the full text is returned (the executor decides whether
+ * to overflow after measuring).
+ */
+export function renderResultText(result: SubagentResult, opts: { overflowPath?: string; capBytes?: number } = {}): string {
 	const header = result.status === "completed" ? "" : `[${result.status}] `;
-	const parts: string[] = [];
 	const body = result.report || "(subagent returned no report text)";
-	parts.push(`${header}${body}`);
 
 	const fields = renderStructuredFields(result.footer);
-	if (fields) parts.push(fields);
-
 	const provenance: string[] = [];
 	if (result.modelUsed) {
 		const fallback = result.fallbackFrom?.length ? ` (after fallback from ${result.fallbackFrom.join(", ")})` : "";
@@ -68,16 +78,27 @@ export function renderResultText(result: SubagentResult): string {
 		const effective = result.effectiveThinkingLevel ?? "(unknown)";
 		provenance.push(`thinking level: requested ${requested}, effective ${effective}`);
 	}
-	if (provenance.length > 0) {
-		parts.push(`Provenance (extension-appended):
-${provenance.map((p) => `- ${p}`).join("\n")}`);
-	}
+	const provenanceBlock = provenance.length
+		? `Provenance (extension-appended):
+${provenance.map((p) => `- ${p}`).join("\n")}`
+		: "";
+	const diagnosticsBlock = result.diagnostics.length
+		? `Diagnostics:
+${result.diagnostics.map((d) => `- ${d}`).join("\n")}`
+		: "";
+	const tail = [fields, provenanceBlock, diagnosticsBlock].filter(Boolean).join("\n\n");
 
-	if (result.diagnostics.length > 0) {
-		parts.push(`Diagnostics:
-${result.diagnostics.map((d) => `- ${d}`).join("\n")}`);
+	// §R8 overflow: when the full composition exceeds the cap and an overflow path is
+	// available, keep the small relay-critical sections whole and truncate the body.
+	if (opts.overflowPath) {
+		const cap = opts.capBytes ?? OVERFLOW_CAP_BYTES;
+		const nonBody = Buffer.byteLength(`${header}\n\n${tail}`, "utf8");
+		const bodyOut = Buffer.byteLength(`${header}\n\n${body}${tail ? `\n\n${tail}` : ""}`, "utf8") > cap
+			? inContextBody(body, nonBody, opts.overflowPath, cap)
+			: body;
+		return [`${header}${bodyOut}`, tail].filter(Boolean).join("\n\n");
 	}
-	return parts.join("\n\n");
+	return [`${header}${body}`, tail].filter(Boolean).join("\n\n");
 }
 
 /** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O). */
@@ -132,7 +153,24 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 				: undefined,
 		});
 
-		const text = renderResultText(result);
+		// Result transport (§R8): the full payload always rides in details; an oversized
+		// in-context result also overflows to a session-scoped temp file that is referenced
+		// (not auto-cleaned) in place of the body.
+		let overflowPath: string | undefined;
+		const full = renderResultText(result);
+		if (Buffer.byteLength(full, "utf8") > OVERFLOW_CAP_BYTES) {
+			overflowPath = overflowFilePath({
+				root: deps.overflowRoot,
+				sessionId: deps.getSessionId?.(),
+				spawnId: newSpawnId(definition.name),
+			});
+			await mkdir(dirname(overflowPath), { recursive: true });
+			await writeFile(overflowPath, full, "utf8");
+			result.overflowPath = overflowPath;
+			result.diagnostics.push(`report overflowed to ${overflowPath} (in-context copy truncated, no auto-cleanup)`);
+		}
+
+		const text = renderResultText(result, { overflowPath });
 		return { content: [{ type: "text", text }], details: { status: result.status, ...result } };
 	};
 }
@@ -175,6 +213,8 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 		getModelRegistry: () => ctx.modelRegistry as ModelRegistryLike | undefined,
 		cwd: ctx.cwd,
 		agentDir: getAgentDir(),
+		overflowRoot: tmpdir(),
+		getSessionId: () => ctx.sessionManager?.getSessionId(),
 	};
 }
 

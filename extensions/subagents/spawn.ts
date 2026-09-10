@@ -35,6 +35,8 @@ export interface SubagentResult {
 	requestedThinkingLevel?: AgentThinkingLevel;
 	/** Effective level after the platform's clamp to model capabilities, if the child session reports it. */
 	effectiveThinkingLevel?: string;
+	/** §R8: set when the report overflowed to a temp file referenced in the in-context result. */
+	overflowPath?: string;
 }
 
 export interface SpawnRunOptions {
