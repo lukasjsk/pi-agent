@@ -6,6 +6,10 @@ import { join } from "node:path";
 
 export type AgentSource = "bundled" | "user";
 
+/** Platform thinking levels (pi-agent-core ThinkingLevel); kept local so this module stays platform-free. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type AgentThinkingLevel = (typeof THINKING_LEVELS)[number];
+
 export interface AgentDefinition {
 	/** Spawn identifier (frontmatter `name`). */
 	name: string;
@@ -13,8 +17,16 @@ export interface AgentDefinition {
 	description: string;
 	/** Required tool allowlist applied at child session creation (frontmatter `tools`). */
 	tools: string[];
+	/** Ordered fallback list (frontmatter `model`); execution is ticket #23. */
+	model?: string[];
+	/** Requested thinking level; the platform clamps to model capabilities (frontmatter `thinkingLevel`). */
+	thinkingLevel?: AgentThinkingLevel;
+	/** Whether the child loads user/project skills (frontmatter `skills`, default on). */
+	skills: boolean;
 	/** The markdown body — the agent's system prompt. */
 	systemPrompt: string;
+	/** Non-fatal issues found while parsing (unknown fields ignored, etc.); surfaced as spawn diagnostics. */
+	warnings: string[];
 	filePath: string;
 	source: AgentSource;
 }
@@ -82,22 +94,72 @@ function parseInlineArray(raw: string): string[] {
 		.filter((item) => item.length > 0);
 }
 
-/** Parse one agent definition file's contents. Throws DefinitionError on invalid definitions. */
+/** The closed frontmatter field set (spec §R2.2). Unknown fields are ignored with a warning. */
+const KNOWN_FIELDS = new Set(["name", "description", "tools", "model", "thinkingLevel", "skills"]);
+
+/** Parse one agent definition file's contents. Throws DefinitionError on invalid definitions; unknown fields warn. */
 export function parseAgentDefinition(filePath: string, contents: string, source: AgentSource): AgentDefinition {
 	const split = splitFrontmatter(contents);
 	if (!split) {
 		throw new DefinitionError(`${filePath}: agent definition must start with YAML frontmatter (---)`);
 	}
-	const name = typeof split.fields.name === "string" ? split.fields.name.trim() : "";
+	const fields = split.fields;
+	const warnings: string[] = [];
+	for (const key of Object.keys(fields)) {
+		if (!KNOWN_FIELDS.has(key)) {
+			warnings.push(`${filePath}: unknown frontmatter field "${key}" ignored`);
+		}
+	}
+
+	const name = typeof fields.name === "string" ? fields.name.trim() : "";
 	if (!name) throw new DefinitionError(`${filePath}: "name" is required`);
-	const tools = split.fields.tools;
+
+	const tools = fields.tools;
 	if (!Array.isArray(tools) || tools.length === 0 || tools.some((t) => typeof t !== "string" || !t)) {
 		throw new DefinitionError(`${filePath}: "tools" is required and must be a non-empty array of tool names`);
 	}
+
+	let model: string[] | undefined;
+	const rawModel = fields.model;
+	if (rawModel !== undefined) {
+		if (typeof rawModel === "string") {
+			if (rawModel.trim()) model = [rawModel.trim()];
+		} else if (Array.isArray(rawModel)) {
+			if (rawModel.length === 0) {
+				throw new DefinitionError(`${filePath}: "model" list must not be empty`);
+			}
+			model = rawModel;
+		}
+		if (!model || model.some((m) => !m.trim())) {
+			throw new DefinitionError(`${filePath}: "model" must be a model string or a non-empty list of model strings`);
+		}
+	}
+
+	let thinkingLevel: AgentThinkingLevel | undefined;
+	const rawThinking = fields.thinkingLevel;
+	if (rawThinking !== undefined) {
+		const value = typeof rawThinking === "string" ? rawThinking.trim().toLowerCase() : "";
+		if (!THINKING_LEVELS.includes(value as AgentThinkingLevel)) {
+			throw new DefinitionError(
+				`${filePath}: "thinkingLevel" must be one of: ${THINKING_LEVELS.join(" | ")} (got "${rawThinking}")`,
+			);
+		}
+		thinkingLevel = value as AgentThinkingLevel;
+	}
+
+	let skills = true; // default on (spec §R2.2)
+	const rawSkills = fields.skills;
+	if (rawSkills !== undefined) {
+		const value = typeof rawSkills === "string" ? rawSkills.trim().toLowerCase() : "";
+		if (value === "on" || value === "true") skills = true;
+		else if (value === "off" || value === "false") skills = false;
+		else throw new DefinitionError(`${filePath}: "skills" must be "on" or "off" (got "${rawSkills}")`);
+	}
+
 	const systemPrompt = split.body.trim();
 	if (!systemPrompt) throw new DefinitionError(`${filePath}: definition body (system prompt) is empty`);
-	const description = typeof split.fields.description === "string" ? split.fields.description.trim() : "";
-	return { name, description, tools, systemPrompt, filePath, source };
+	const description = typeof fields.description === "string" ? fields.description.trim() : "";
+	return { name, description, tools, model, thinkingLevel, skills, systemPrompt, warnings, filePath, source };
 }
 
 export interface DiscoveryDirs {

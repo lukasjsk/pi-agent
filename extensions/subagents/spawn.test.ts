@@ -78,6 +78,37 @@ test("passes the requested model through to the child", async () => {
 	assert.deepEqual(lastCaptured(captured).model, model);
 });
 
+test("passes the definition's thinkingLevel to the child session", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession() };
+	};
+	await runSubagent({ ...baseOptions, definition: { ...scout, thinkingLevel: "high" } });
+	assert.equal(lastCaptured(captured).thinkingLevel, "high");
+});
+
+test("skills: off disables skill discovery in the child", async () => {
+	const loaders: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		loaders.push((options.resourceLoader as { options: Record<string, unknown> }).options);
+		return { session: fakeSession() };
+	};
+	await runSubagent({ ...baseOptions, definition: { ...scout, skills: false } });
+	assert.equal(loaders[loaders.length - 1].noSkills, true);
+	await runSubagent(baseOptions); // default: skills on
+	assert.equal(loaders[loaders.length - 1].noSkills, false);
+});
+
+test("definition warnings ride the spawn's diagnostics", async () => {
+	platformHooks.createAgentSession = async () => ({ session: fakeSession() });
+	const warned = { ...scout, warnings: ["/x/scout.md: unknown frontmatter field \"foo\" ignored"] };
+	const result = await runSubagent(baseOptions);
+	assert.deepEqual(result.diagnostics, []); // clean definition: no diagnostics
+	const result2 = await runSubagent({ ...baseOptions, definition: warned });
+	assert.deepEqual(result2.diagnostics, warned.warnings);
+});
+
 test("relays child activity as progress", async () => {
 	const progress: string[] = [];
 	platformHooks.createAgentSession = async () => {

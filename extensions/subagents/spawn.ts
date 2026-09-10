@@ -6,7 +6,8 @@
 //                                  the child receives none of the parent's conversation
 //   - tools                      → the definition's allowlist; unknown names fail the spawn fast
 //   - cwd                        → inherited from the orchestrator, not a per-spawn override
-//   - skills + context files     → default discovery stays ON (spec §R1.4, §R10)
+//   - thinkingLevel              → the definition's requested level; the platform clamps to model capabilities
+//   - skills                     → definition-controlled (skills: off → noSkills); context files stay ON (§R1.4)
 
 import {
 	createAgentSession,
@@ -69,6 +70,7 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 		noExtensions: true, // hard rule: children never load extensions (spec §R1.4)
 		noThemes: true,
 		noPromptTemplates: true,
+		noSkills: !definition.skills, // skills: off → child skips skill discovery (spec §R2.2)
 		systemPromptOverride: () => definition.systemPrompt,
 	});
 	await loader.reload();
@@ -78,11 +80,13 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 		agentDir,
 		tools: definition.tools,
 		model: options.model,
+		thinkingLevel: definition.thinkingLevel, // platform clamps to model capabilities (spec §R2.2)
 		resourceLoader: loader,
 		sessionManager: SessionManager.inMemory(cwd),
 	});
 
-	const diagnostics: string[] = [];
+	// Definition-level warnings (unknown fields, etc.) ride the spawn's diagnostics.
+	const diagnostics: string[] = [...definition.warnings];
 	let streamed = "";
 	const activity: string[] = [];
 	const emitProgress = () => {

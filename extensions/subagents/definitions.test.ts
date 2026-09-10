@@ -67,11 +67,55 @@ test("parseAgentDefinition builds the definition", () => {
 			name: "scout",
 			description: "explores",
 			tools: ["read", "grep"],
+			model: undefined,
+			thinkingLevel: undefined,
+			skills: true,
 			systemPrompt: "Do recon.",
+			warnings: [],
 			filePath: "/x/scout.md",
 			source: "bundled",
 		},
 	);
+});
+
+test("model parses as a single string or a list; empty list fails", () => {
+	const single = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: anthropic/claude-sonnet-4-5\n---\nP", "user");
+	assert.deepEqual(single.model, ["anthropic/claude-sonnet-4-5"]);
+	const list = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: [a/x, b/y]\n---\nP", "user");
+	assert.deepEqual(list.model, ["a/x", "b/y"]);
+	assert.throws(
+		() => parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: []\n---\nP", "user"),
+		/list must not be empty/,
+	);
+});
+
+test("thinkingLevel validates against the platform levels", () => {
+	const def = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nthinkingLevel: high\n---\nP", "user");
+	assert.equal(def.thinkingLevel, "high");
+	assert.throws(
+		() => parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nthinkingLevel: extreme\n---\nP", "user"),
+		/thinkingLevel" must be one of/,
+	);
+});
+
+test("skills accepts on/off (and true/false), defaults to on", () => {
+	assert.equal(parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nskills: off\n---\nP", "user").skills, false);
+	assert.equal(parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nskills: on\n---\nP", "user").skills, true);
+	assert.equal(parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nskills: false\n---\nP", "user").skills, false);
+	assert.equal(parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\n---\nP", "user").skills, true);
+	assert.throws(
+		() => parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nskills: maybe\n---\nP", "user"),
+		/skills" must be "on" or "off"/,
+	);
+});
+
+test("unknown fields are ignored with a warning carried on the definition", () => {
+	const def = parseAgentDefinition(
+		"/x/a.md",
+		"---\nname: a\ntools: [read]\ncustomField: hello\n---\nP",
+		"user",
+	);
+	assert.deepEqual(def.warnings, ['/x/a.md: unknown frontmatter field "customField" ignored']);
 });
 
 test("parseAgentDefinition rejects missing name, missing tools, and empty body", () => {
