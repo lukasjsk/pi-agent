@@ -42,7 +42,12 @@ export interface SubagentActivity {
 	contentLines: readonly string[];
 	/** The child's current model as "provider/id". */
 	model?: string;
-	/** Best-effort accumulated child cost in USD; absent until the first usage-bearing message. */
+	/** Effective thinking level after the platform's clamp (§R11.5 live payload). */
+	effectiveThinkingLevel?: string;
+	/** Running token totals (assistant messages so far); display-only (§R11.5). */
+	tokens?: { input: number; output: number };
+	/** Best-effort accumulated child cost in USD; absent until the first usage-bearing message.
+	 *  Display-only — the settled ChildUsage is the single accounting source (§R11.6). */
 	cost?: number;
 }
 
@@ -77,8 +82,14 @@ export interface SubagentResult {
 	/** §R8: set when the report overflowed to a temp file referenced in the in-context result. */
 	overflowPath?: string;
 	/** Total child-session usage (assistant messages + nested tool results), from getSessionStats();
-	 *  returned on the tool result so /session, RPC, and the footer reflect it (research doc §6). */
+	 *  returned on the tool result so /session, RPC, and the footer reflect it (research doc §6).
+	 *  Usage from failed fallback attempts folds in here (§R11.6). */
 	usage?: ChildUsage;
+	/** The child's full tool-call list for the settled expanded view (§R11.5): capped at
+	 *  CALLS_CAP with the oldest dropped; callsOmitted counts what did not fit. */
+	calls?: readonly SubagentToolCallSummary[];
+	/** How many tool calls fell off the front of the cap (absent when none). */
+	callsOmitted?: number;
 }
 
 export interface SpawnRunOptions {
@@ -125,11 +136,15 @@ const CONTENT_LINE_TAIL = 10;
 const CONTENT_LINE_PAYLOAD_CAP = 200;
 /** Tool-call summaries relayed per update (oldest dropped first). */
 const TOOL_CALL_TAIL = 20;
+/** Settled calls-list cap (§R11.5): the full list up to 1000, oldest dropped. */
+const CALLS_CAP = 1000;
 
 export async function runSubagent(options: SpawnRunOptions): Promise<SubagentResult> {
 	const { definition, cwd, signal } = options;
 	validateToolNames(definition);
 	const agentDir = options.agentDir ?? getAgentDir();
+	// Usage from failed fallback attempts folds into the returned total (§R11.6).
+	let foldedUsage: ChildUsage | undefined;
 
 	const loader = new DefaultResourceLoader({
 		cwd,
@@ -160,15 +175,24 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 
 		if (result.status === "failed" && hasNext) {
 			// Runtime failure mid-task: discard partial progress, retry on the next entry (§R4.2).
+			// The failed attempt's partial spend is real cost — fold it into the child's total
+			// and note it in diagnostics (§R11.6).
+			foldedUsage = mergeUsage(foldedUsage, result.usage);
 			const failedOn = model ? refId(model) : "the platform default model";
 			const nextOn = chain[attempt + 1] ? refId(chain[attempt + 1]!) : "the platform default model";
-			diagnostics.push(`runtime failure on ${failedOn}; partial progress discarded, retrying on ${nextOn}`);
+			const spent = result.usage?.cost.total;
+			diagnostics.push(
+				`runtime failure on ${failedOn}; partial progress discarded` +
+					(spent ? ` ($${spent.toFixed(4)} of partial usage folded into the child's total)` : "") +
+					`, retrying on ${nextOn}`,
+			);
 			fallbackFrom.push(model ? refId(model) : "platform default");
 			continue;
 		}
 
 		return {
 			...result,
+			usage: mergeUsage(foldedUsage, result.usage),
 			diagnostics,
 			fallbackFrom: fallbackFrom.length > 0 ? fallbackFrom : undefined,
 		};
@@ -209,6 +233,9 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 	const toolCalls: SubagentToolCallSummary[] = [];
 	let costTotal = 0;
 	let costSeen = false;
+	let tokensIn = 0;
+	let tokensOut = 0;
+	let tokensSeen = false;
 
 	/** Raw tail of the child's visible generated text (assistant text only — thinking
 	 *  deltas never reach here since only text_delta is accumulated). */
@@ -228,6 +255,8 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			toolCalls: toolCalls.slice(-TOOL_CALL_TAIL).map((call) => ({ ...call })),
 			contentLines: contentLines(),
 			model: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
+			effectiveThinkingLevel: effectiveThinkingLevel(session),
+			tokens: tokensSeen ? { input: tokensIn, output: tokensOut } : undefined,
 			cost: costSeen ? costTotal : undefined,
 		});
 	};
@@ -261,14 +290,26 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			return;
 		}
 		if (event.type === "message_end") {
-			// Live cost: same buckets the platform's getSessionStats() sums — assistant
-			// messages plus tool-result usage (nested scout spawns), best-effort while
-			// streaming (research doc §2–§3).
-			const usage = (event.message as { usage?: { cost?: { total?: number } } } | undefined)?.usage;
-			const total = usage?.cost?.total;
-			if (typeof total === "number" && total > 0) {
-				costTotal += total;
-				costSeen = true;
+			// Live relay (display-only, §R11.5–R11.6): assistant-message usage — the same
+			// buckets the platform's getSessionStats() sums, minus nested tool results,
+			// which ride scout tool results instead of message_end (research doc §2–§3).
+			const usage = (
+				event.message as { usage?: { input?: number; output?: number; cost?: { total?: number } } } | undefined
+			)?.usage;
+			if (usage) {
+				if (typeof usage.input === "number" && usage.input > 0) {
+					tokensIn += usage.input;
+					tokensSeen = true;
+				}
+				if (typeof usage.output === "number" && usage.output > 0) {
+					tokensOut += usage.output;
+					tokensSeen = true;
+				}
+				const total = usage.cost?.total;
+				if (typeof total === "number" && total > 0) {
+					costTotal += total;
+					costSeen = true;
+				}
 				emitActivity();
 			}
 			return;
@@ -309,6 +350,7 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
 			usage: childUsage(session),
+			...settledCalls(toolCalls),
 		};
 	} catch (error) {
 		attemptDiagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -322,6 +364,7 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
 			usage: childUsage(session),
+			...settledCalls(toolCalls),
 		};
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
@@ -333,6 +376,40 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 /** The session's thinking level is post-clamp (effective); absent on mocked/partial sessions. */
 function effectiveThinkingLevel(session: { thinkingLevel?: unknown }): string | undefined {
 	return typeof session.thinkingLevel === "string" ? session.thinkingLevel : undefined;
+}
+
+/** Settled calls list (§R11.5): the full list up to CALLS_CAP, oldest dropped first; the
+ *  omission count rides alongside so the renderer can draw the marker. Content lines are
+ *  not carried — the report supersedes them at settle. */
+function settledCalls(calls: readonly SubagentToolCallSummary[]): {
+	calls: readonly SubagentToolCallSummary[];
+	callsOmitted?: number;
+} {
+	const omitted = Math.max(0, calls.length - CALLS_CAP);
+	return {
+		calls: omitted > 0 ? calls.slice(omitted) : [...calls],
+		callsOmitted: omitted > 0 ? omitted : undefined,
+	};
+}
+
+/** Per-field usage sum; used to fold failed fallback attempts into the returned total (§R11.6). */
+function mergeUsage(a: ChildUsage | undefined, b: ChildUsage | undefined): ChildUsage | undefined {
+	if (!a) return b;
+	if (!b) return a;
+	return {
+		input: a.input + b.input,
+		output: a.output + b.output,
+		cacheRead: a.cacheRead + b.cacheRead,
+		cacheWrite: a.cacheWrite + b.cacheWrite,
+		totalTokens: a.totalTokens + b.totalTokens,
+		cost: {
+			input: a.cost.input + b.cost.input,
+			output: a.cost.output + b.cost.output,
+			cacheRead: a.cost.cacheRead + b.cost.cacheRead,
+			cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
+			total: a.cost.total + b.cost.total,
+		},
+	};
 }
 
 /** Total child usage, read once after the run (before dispose); mirrors /session + RPC

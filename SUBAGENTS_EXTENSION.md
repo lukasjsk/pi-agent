@@ -237,10 +237,11 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
 7. **Narrow terminals (map fog, settled):** line-level truncation to terminal width only; every line (header,
    tool rows, content lines) truncates independently and the row reflows line-by-line. No special narrow-mode
    layout; sections never merge or drop.
-8. **Implementation status at spec time:** decided here, not yet in code — the two-line header (thinking level,
-   running tokens, 4-decimal cost), collapsed tool rows at 3 (code shows 5), live payload thinking/tokens, the
-   settled `calls` list with content lines dropped at settle, and failed-retry usage folding. These close at
-   implementation hand-off; everything else is already implemented and test-covered.
+8. **Implementation status:** shipped — the bordered self-shell framing, two-line header (thinking level,
+   running tokens, 4-decimal cost), collapsed tool rows at 3, live payload thinking/tokens, the settled `calls`
+   list (cap 1000, omission marker, content lines dropped at settle), and failed-retry usage folding are
+   implemented and test-covered. The live relay cost stays display-only; the settled `usage` on the tool
+   result is the single accounting source.
 
 ## 4. Implementation plan
 
@@ -259,7 +260,9 @@ Phased so each step is testable in isolation; platform references are to the pi 
    overflow files, `details` payload, Esc handling, concurrency cap 4 + queue.
 5. **Output contract** — JSON footer parse with graceful degradation, provenance append, truncation.
 6. **Worker-side restricted tool** — scout-only injection via `customTools`, depth enforcement.
-7. **TUI observability** — implement §R11 (the contract is settled; the implementation gaps it lists close here).
+7. **TUI observability** — implemented per §R11: bordered self-shell framing, two-line live header, 3-row
+   collapsed tail, live payload thinking/tokens, settled `calls` list with omission marker, and failed-retry
+   usage folding.
 8. **Acceptance pass** — walk every requirement in §3 against the implementation; exercise parallel spawns, a
    runtime-failure fallback, an unparseable footer, an oversized report, Esc-cancel mid-run.
 

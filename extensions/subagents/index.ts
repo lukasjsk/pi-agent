@@ -63,6 +63,11 @@ export type SubagentToolDetails =
 			toolCalls?: readonly SubagentToolCallSummary[];
 			contentLines?: readonly string[];
 			model?: string;
+			/** Effective thinking level after the platform's clamp (§R11.5 live payload). */
+			effectiveThinkingLevel?: string;
+			/** Running token totals; display-only (§R11.5). */
+			tokens?: { input: number; output: number };
+			/** Display-only live cost; the settled usage is the accounting source (§R11.6). */
 			cost?: number;
 	  }
 	| ({ status: SubagentResult["status"] } & SubagentResult);
@@ -98,6 +103,7 @@ export function createScoutTool(deps: SubagentDeps): ToolDefinition {
 		name: SCOUT_TOOL_NAME,
 		label: "Scout",
 		executionMode: "parallel",
+		renderShell: "self",
 		description:
 			"Delegate exploration to a scout subagent and wait for its report. The scout is read-only " +
 			"(read, grep, find, ls) and returns a map of the relevant code with exact file:line references. " +
@@ -296,6 +302,7 @@ export default function (pi: ExtensionAPI) {
 		pi.registerTool({
 			name: "subagent",
 			label: "Subagent",
+			renderShell: "self",
 			description: toolDescription(discoverAgents(discoveryDirs())),
 			parameters: SubagentParams,
 			executionMode: "parallel",

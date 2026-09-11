@@ -628,7 +628,7 @@ test("collapsed result is one status line with role, elapsed, usage, and counts"
 	assert.doesNotMatch(plain, /## Start Here/, "collapsed does not include the report body");
 });
 
-test("live activity view: tool-call summary rows, content lines, model and cost", () => {
+test("live activity view: two-line header with model, thinking, tokens, cost, and rows", () => {
 	const text = renderSubagentResult(
 		{
 			details: {
@@ -641,6 +641,8 @@ test("live activity view: tool-call summary rows, content lines, model and cost"
 				],
 				contentLines: ["reading files", "editing now"],
 				model: "github-copilot/gpt-5.6-terra",
+				effectiveThinkingLevel: "high",
+				tokens: { input: 900, output: 300 },
 				cost: 0.0123,
 			},
 		},
@@ -649,10 +651,12 @@ test("live activity view: tool-call summary rows, content lines, model and cost"
 		{ state: { startedAt: Date.now() - 3_000 }, args: { agent: "worker", task: "T" } },
 	).text.replace(/\x1b\[[0-9;]*m/g, "");
 	const lines = text.split("\n");
-	// Header: status · role · elapsed · model · cost; the progress tail is suppressed
-	// once richer rows exist (it duplicates the content lines).
-	assert.match(lines[0], /^◦ running · worker · 3s · github-copilot\/gpt-5\.6-terra · \$0\.012$/);
+	// Two-line header (§R11.2): line 1 (role · task excerpt) renders via renderSubagentCall;
+	// line 2 is model · effective thinking · elapsed · running tokens · live cost (4-decimal).
+	// The flat progress tail is suppressed once richer rows exist.
+	assert.match(lines[0], /^◦ running · github-copilot\/gpt-5\.6-terra · high · 3s · 1\.2k tok · \$0\.0123$/);
 	assert.doesNotMatch(text, /streamed tail/);
+	assert.doesNotMatch(lines[0], /worker/, "the role lives on line 1, not the result header");
 	// One tool-call summary row per call, status marker + name + primary target.
 	assert.match(lines[1], /^  ✓ read src\/util\.ts$/);
 	assert.match(lines[2], /^  ✗ bash bun test$/);
@@ -663,7 +667,7 @@ test("live activity view: tool-call summary rows, content lines, model and cost"
 	assert.equal(lines.length, 6);
 });
 
-test("live activity view collapsed caps: 5 tool rows and 3 content lines; expanded shows all", () => {
+test("live activity view collapsed caps: 3 tool rows and 3 content lines; expanded shows all", () => {
 	const toolCalls = Array.from({ length: 8 }, (_, i) => ({
 		toolCallId: String(i),
 		toolName: "read",
@@ -681,11 +685,11 @@ test("live activity view collapsed caps: 5 tool rows and 3 content lines; expand
 		ctx,
 	).text.replace(/\x1b\[[0-9;]*m/g, "");
 	const cLines = collapsed.split("\n");
-	assert.match(cLines[1], /f3\.ts$/, "collapsed shows the last 5 tool rows");
-	assert.match(cLines[5], /f7\.ts$/);
-	assert.doesNotMatch(collapsed, /f2\.ts/);
-	assert.match(cLines[6], /line 5$/, "collapsed shows the last 3 content lines");
-	assert.match(cLines[8], /line 7$/);
+	assert.match(cLines[1], /f5\.ts$/, "collapsed shows the last 3 tool rows");
+	assert.match(cLines[3], /f7\.ts$/);
+	assert.doesNotMatch(collapsed, /f4\.ts/);
+	assert.match(cLines[4], /line 5$/, "collapsed shows the last 3 content lines");
+	assert.match(cLines[6], /line 7$/);
 	assert.doesNotMatch(collapsed, /line 4/);
 
 	const expanded = renderSubagentResult(
@@ -718,14 +722,15 @@ test("content lines are capped raw with an ellipsis marker; cost hidden while ze
 	assert.doesNotMatch(text, /\$/, "no cost line until usage has been seen");
 });
 
-test("partial results render a live status line; queued state is visible", () => {
+test("partial results render a live status line; queued state is visible with its role", () => {
 	const running = renderSubagentResult(
 		{ details: { status: "running", progress: "tools: read · some streamed tail" } },
 		{ expanded: false, isPartial: true },
 		theme,
 		{ state: { startedAt: Date.now() - 3_000 }, args: { agent: "worker", task: "T" } },
 	).text.replace(/\x1b\[[0-9;]*m/g, "");
-	assert.match(running, /^◦ running · worker · 3s · tools: read/);
+	// Running: no progress tail and no role — the role lives on the renderCall line.
+	assert.match(running, /^◦ running · 3s$/);
 
 	const queued = renderSubagentResult(
 		{ details: { status: "running", progress: "queued — 2 spawn(s) ahead" } },
@@ -748,13 +753,53 @@ test("expanded result renders body, decision points, open questions, provenance 
 	assert.match(text, /Open questions\n  \? Which style\? — affects the API/);
 	assert.match(text, /· model: github-copilot\/gpt-5\.6-terra/);
 	assert.match(text, /after fallback from local-qwen38\/x/);
+	assert.doesNotMatch(text, /Tool calls/, "no calls section when details carries none");
 });
 
-test("renderCall is the static role · task-excerpt header and seeds elapsed timing", () => {
+test("expanded settled shows the full persisted tool-call list with an omission marker (§R11.3, §R11.5)", () => {
+	const calls = Array.from({ length: 4 }, (_, i) => ({
+		toolCallId: String(i),
+		toolName: "read",
+		summary: `f${i}.ts`,
+		status: "done" as const,
+	}));
+	const text = renderSubagentResult(
+		{ details: { ...settledDetails, calls, callsOmitted: 2 } },
+		{ expanded: true, isPartial: false },
+		theme,
+		{ state: { startedAt: Date.now() - 14_000 }, args: { agent: "scout", task: "Recon" } },
+	).text.replace(/\x1b\[[0-9;]*m/g, "");
+	assert.match(text, /Tool calls\n  … 2 earlier call\(s\) omitted\n  ✓ read f0\.ts\n  ✓ read f1\.ts\n  ✓ read f2\.ts\n  ✓ read f3\.ts$/m);
+	// Content lines are dropped at settle — the report supersedes them.
+	assert.doesNotMatch(text, /contentLines/);
+});
+
+test("the settled row shifts the frame to the status color and keeps it constant (§R11.1)", () => {
+	const state: Record<string, unknown> = {};
+	renderSubagentCall({ agent: "worker", task: "T" }, theme, { state });
+	assert.equal(state.border, "accent", "worker runs in the accent color");
+
+	const state2: Record<string, unknown> = {};
+	renderSubagentCall({ agent: "scout", task: "T" }, theme, { state: state2 });
+	assert.equal(state2.border, "muted", "scout runs muted");
+	renderSubagentResult(
+		{ details: { ...settledDetails, status: "failed" } },
+		{ expanded: false, isPartial: false },
+		theme,
+		{ state: state2, args: { agent: "scout", task: "T" } },
+	);
+	assert.equal(state2.border, "error", "settled rows shift to the status color");
+});
+
+test("renderCall is the static role · task-excerpt header plus the frame's top rule, and seeds elapsed timing", () => {
 	const state: Record<string, unknown> = {};
 	const first = renderSubagentCall({ agent: "scout", task: "Recon the repo." }, theme, { state });
 	assert.match(first.text.replace(/\x1b\[[0-9;]*m/g, ""), /^scout · "Recon the repo\."$/);
 	assert.equal(typeof state.startedAt, "number", "elapsed timing seeded on first call render");
+	const rendered = first.render(80);
+	assert.equal(rendered.length, 2, "top rule + header line");
+	assert.match(rendered[0], /^─+$/, "top border rule");
+	assert.equal(rendered[1], 'scout · "Recon the repo."');
 });
 
 test("failed and cancelled statuses render with distinct markers and diagnostics", () => {

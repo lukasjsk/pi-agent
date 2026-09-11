@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-11
+
+### Added
+
+- The subagents extension's TUI rows now render their own shell per spec §R11 (SUBAGENTS_EXTENSION.md): each subagent/scout row is framed by a border in the role color while running (worker accent, scout muted) shifting to the status color when settled, with no background tint and line-level truncation to terminal width. The live row shows a two-line header — role · task excerpt, then model · effective thinking level · elapsed · running tokens · live cost (4-decimal) — with the last 3 tool-call summary rows and last 3 content lines collapsed (all expanded). The settled expanded view appends the full persisted tool-call list (capped at 1000 with an omission marker); content lines are dropped at settle. A failed fallback attempt's partial usage folds into the child's returned usage total and is noted in diagnostics.
+
 ## 2026-09-10
 
 ### Added
