@@ -54,6 +54,14 @@ export const piCodingAgentMock = {
 	},
 	getAgentDir: () => "/fake/agent-dir",
 	defineTool: (tool: unknown) => tool,
+	// subagents self-shell framing (§R11.1): a full-width rule line.
+	DynamicBorder: class {
+		constructor(private color?: (s: string) => string) {}
+		render(width: number): string[] {
+			return [this.color ? this.color("─".repeat(Math.max(1, width))) : "─".repeat(Math.max(1, width))];
+		}
+		invalidate(): void {}
+	},
 };
 
 /** Register the shared mock. Idempotent: every file may call it, in any order. */
@@ -65,7 +73,7 @@ export function installPiCodingAgentMock(): void {
 // the Text component. One shape for the whole repo.
 export const piTuiMock = {
 	visibleWidth: (text: string) => text.length,
-	truncateToWidth: (text: string) => text,
+	truncateToWidth: (text: string, _maxWidth?: number) => text,
 	Text: class {
 		text: string;
 		constructor(text = "") {

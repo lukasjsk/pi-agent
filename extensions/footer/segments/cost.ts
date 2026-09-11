@@ -1,4 +1,5 @@
 import type { RenderedSegment, SegmentContext } from "../types.js";
+import { agentCostLabel } from "../usage.js";
 import { applyColor } from "../theme.js";
 
 function costColor(cost: number): "success" | "warning" | "error" | "#ff9800" {
@@ -15,25 +16,20 @@ function formatCost(ctx: SegmentContext, cost: number): string {
 export const costSegment = {
   id: "cost" as const,
   render(ctx: SegmentContext): RenderedSegment {
-    const subagentTotal = Object.values(ctx.subagentCosts).reduce((total, cost) => total + (cost ?? 0), 0);
-    const totalCost = ctx.usageStats.cost + subagentTotal;
+    // Child usage rides the subagent tool result's message.usage and is already part of
+    // usageStats (calculateUsage sums toolResult messages), matching /session and the
+    // built-in footer. The per-agent breakdown is informational — never added on top.
+    const totalCost = ctx.usageStats.cost;
     let content = formatCost(ctx, totalCost);
 
-    const labels: Array<[keyof typeof ctx.subagentCosts, string]> = [
-      ["explorer", "E"],
-      ["planner", "P"],
-      ["implementer", "I"],
-      ["reviewer", "R"],
-    ];
-    const subagentBreakdown = labels
-      .filter(([agent]) => ctx.subagentCosts[agent] !== undefined)
-      .map(([agent, label]) => `${label}:${formatCost(ctx, ctx.subagentCosts[agent] ?? 0)}`);
     const breakdown = [
       `O:${formatCost(ctx, ctx.usageStats.cost)}`,
-      ...subagentBreakdown,
+      ...Object.entries(ctx.subagentCosts)
+        .filter(([, cost]) => cost !== undefined)
+        .map(([agent, cost]) => `${agentCostLabel(agent)}:${formatCost(ctx, cost ?? 0)}`),
     ];
 
-    if (subagentBreakdown.length > 0) {
+    if (Object.keys(ctx.subagentCosts).length > 0) {
       content += `${applyColor(ctx.theme, "dim", " (")}${breakdown.join(applyColor(ctx.theme, "dim", ", "))}${applyColor(ctx.theme, "dim", ")")}`;
     }
 

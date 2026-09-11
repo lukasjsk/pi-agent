@@ -18,7 +18,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
-import { runSubagent, type SubagentResult } from "./spawn.ts";
+import { runSubagent, type ChildUsage, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
 import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from "./transport.ts";
@@ -56,7 +56,20 @@ const SubagentParams = Type.Object({
 });
 
 export type SubagentToolDetails =
-	| { status: "running"; progress: string }
+	| {
+			status: "running";
+			progress: string;
+			/** Live activity relay (CONTEXT.md "Tool-call summary" / "Content line"); absent on the queued notice. */
+			toolCalls?: readonly SubagentToolCallSummary[];
+			contentLines?: readonly string[];
+			model?: string;
+			/** Effective thinking level after the platform's clamp (§R11.5 live payload). */
+			effectiveThinkingLevel?: string;
+			/** Running token totals; display-only (§R11.5). */
+			tokens?: { input: number; output: number };
+			/** Display-only live cost; the settled usage is the accounting source (§R11.6). */
+			cost?: number;
+	  }
 	| ({ status: SubagentResult["status"] } & SubagentResult);
 
 export interface SubagentDeps {
@@ -90,6 +103,7 @@ export function createScoutTool(deps: SubagentDeps): ToolDefinition {
 		name: SCOUT_TOOL_NAME,
 		label: "Scout",
 		executionMode: "parallel",
+		renderShell: "self",
 		description:
 			"Delegate exploration to a scout subagent and wait for its report. The scout is read-only " +
 			"(read, grep, find, ls) and returns a map of the relevant code with exact file:line references. " +
@@ -158,7 +172,7 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 		params: { agent?: string; task: string; model?: string; thinkingLevel?: string },
 		signal: AbortSignal | undefined,
 		onUpdate: ((partial: { content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }) => void) | undefined,
-	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails }> {
+	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails; usage?: ChildUsage }> {
 		let definition: AgentDefinition;
 		try {
 			definition = deps.resolveAgent(fixedAgent ?? params.agent!);
@@ -206,8 +220,12 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 					thinkingLevel: thinkingOverride as never,
 					childTools,
 					signal,
-					onProgress: onUpdate
-						? (text) => onUpdate({ content: [{ type: "text", text: `[${definition.name}] ${text}` }], details: { status: "running", progress: text } })
+					onActivity: onUpdate
+						? (activity: SubagentActivity) =>
+								onUpdate({
+									content: [{ type: "text", text: `[${definition.name}] ${activity.progress}` }],
+									details: { status: "running", ...activity },
+								})
 						: undefined,
 				}),
 			signal,
@@ -248,7 +266,9 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 		}
 
 		const text = renderResultText(result, { overflowPath });
-		return { content: [{ type: "text", text }], details: { status: result.status, ...result } };
+		// usage rides the tool result: /session, RPC, and the footer sum it automatically
+		// (built-in footer.js, agent-session.js getSessionStats — research doc §6).
+		return { content: [{ type: "text", text }], details: { status: result.status, ...result }, usage: result.usage };
 	};
 }
 
@@ -282,6 +302,7 @@ export default function (pi: ExtensionAPI) {
 		pi.registerTool({
 			name: "subagent",
 			label: "Subagent",
+			renderShell: "self",
 			description: toolDescription(discoverAgents(discoveryDirs())),
 			parameters: SubagentParams,
 			executionMode: "parallel",

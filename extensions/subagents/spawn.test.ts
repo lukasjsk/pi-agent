@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart, type FakeSession } from "./pi-mock.ts";
+import { fakeSession, installPlatformMock, messageEnd, platformHooks, textDelta, toolEnd, toolStart, type FakeSession } from "./pi-mock.ts";
 
 installPlatformMock();
 
@@ -294,24 +294,138 @@ test("definition warnings ride the spawn's diagnostics", async () => {
 	);
 });
 
-test("relays child activity as progress", async () => {
-	const progress: string[] = [];
+test("relays structured child activity: progress, tool summaries, content lines, thinking, tokens, cost", async () => {
+	const updates: Parameters<NonNullable<Parameters<typeof runSubagent>[0]["onActivity"]>>[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			thinkingLevel: "high", // platform post-clamp effective level
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+		});
+		session.prompt = async () => {
+			toolStart(session, "read", { file_path: "src/util.ts" }, "call-1");
+			toolEnd(session, "read", { toolCallId: "call-1" });
+			toolStart(session, "bash", { command: "bun test\nsecond line" }, "call-2");
+			toolEnd(session, "bash", { toolCallId: "call-2", isError: true });
+			textDelta(session, "first line\n\nsecond line\n");
+			textDelta(session, "x".repeat(400));
+			messageEnd(session, { usage: { input: 900, output: 300, cost: { total: 0.0123 } } });
+		};
+		return { session };
+	};
+
+	await runSubagent({ ...baseOptions, onActivity: (activity) => updates.push(activity) });
+
+	assert.ok(updates.length >= 6);
+	// Legacy flat digest still present and bounded.
+	assert.match(updates[0].progress, /tools: read/);
+	assert.ok(updates[updates.length - 1].progress.length <= 330, "progress text is a bounded tail");
+	// Tool-call summaries (CONTEXT.md "Tool-call summary"): one line each, status markers.
+	const last = updates[updates.length - 1];
+	assert.deepEqual(
+		last.toolCalls.map((c) => [c.toolName, c.summary, c.status]),
+		[
+			["read", "src/util.ts", "done"],
+			["bash", "bun test", "error"],
+		],
+	);
+	// Content lines (CONTEXT.md "Content line"): raw non-empty lines, tail-most last.
+	assert.deepEqual(last.contentLines.slice(0, 1), ["first line"]);
+	assert.ok(last.contentLines[last.contentLines.length - 1].startsWith("xxx"));
+	assert.equal(last.contentLines.includes(""), false, "empty lines are dropped");
+	// Live payload (§R11.5): model, effective thinking, running tokens, display-only cost.
+	assert.equal(last.model, "test-provider/test-model");
+	assert.equal(last.effectiveThinkingLevel, "high");
+	assert.deepEqual(last.tokens, { input: 900, output: 300 });
+	assert.equal(last.cost, 0.0123);
+	// Tokens/cost are absent until the first usage-bearing message settles.
+	assert.equal(updates[0].tokens, undefined);
+	assert.equal(updates[0].cost, undefined);
+});
+
+test("settled result carries the full call list, capped at 1000 with an omission count (§R11.5)", async () => {
 	platformHooks.createAgentSession = async () => {
 		const session = fakeSession({
 			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
 		});
 		session.prompt = async () => {
-			toolStart(session, "grep");
-			textDelta(session, "x".repeat(400));
+			for (let i = 0; i < 1002; i++) {
+				toolStart(session, "read", { file_path: `f${i}.ts` }, `call-${i}`);
+				toolEnd(session, "read", { toolCallId: `call-${i}` });
+			}
 		};
 		return { session };
 	};
 
-	await runSubagent({ ...baseOptions, onProgress: (text) => progress.push(text) });
+	const result = await runSubagent(baseOptions);
 
-	assert.ok(progress.length >= 2);
-	assert.match(progress[0], /tools: grep/);
-	assert.ok(progress[progress.length - 1].length <= 330, "progress text is a bounded tail");
+	assert.equal(result.calls?.length, 1000, "cap holds");
+	assert.equal(result.callsOmitted, 2, "oldest calls dropped first, count surfaced");
+	assert.equal(result.calls![0].summary, "f2.ts");
+});
+
+test("a failed fallback attempt's usage folds into the returned total and is noted in diagnostics (§R11.6)", async () => {
+	platformHooks.createAgentSession = async (options) => {
+		const isPrimary = (options.model as { id: string }).id === "primary";
+		return {
+			session: fakeSession(
+				isPrimary
+					? {
+						errorMessage: "all retries exhausted",
+						messages: [],
+						model: { provider: "a", id: "primary" },
+						stats: { tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 }, cost: 0.0042 },
+					}
+					: {
+						messages: [{ role: "assistant", content: [{ type: "text", text: "report from fallback" }] }],
+						model: { provider: "b", id: "backup" },
+						stats: { tokens: { input: 2000, output: 1000, cacheRead: 0, cacheWrite: 0, total: 3000 }, cost: 0.02 },
+					},
+			),
+		};
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [
+			{ provider: "a", id: "primary" },
+			{ provider: "b", id: "backup" },
+		],
+	});
+
+	assert.equal(result.status, "completed");
+	assert.ok(result.usage);
+	assert.equal(result.usage!.input, 3000, "failed attempt's input folds in");
+	assert.equal(result.usage!.output, 1500);
+	assert.equal(result.usage!.totalTokens, 4500);
+	assert.ok(Math.abs(result.usage!.cost.total - 0.0242) < 1e-9, "failed attempt's spend folds in");
+	assert.ok(
+		result.diagnostics.some((d) => /runtime failure on a\/primary.*\$0\.0042 of partial usage folded.*retrying on b\/backup/.test(d)),
+		"the folded spend is noted in diagnostics",
+	);
+});
+
+test("activity relay is bounded: at most 20 tool calls and 10 content lines", async () => {
+	const updates: Parameters<NonNullable<Parameters<typeof runSubagent>[0]["onActivity"]>>[] = [];
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+		});
+		session.prompt = async () => {
+			for (let i = 0; i < 25; i++) {
+				toolStart(session, "read", { file_path: `f${i}.ts` }, `call-${i}`);
+				toolEnd(session, "read", { toolCallId: `call-${i}` });
+			}
+			for (let i = 0; i < 15; i++) textDelta(session, `line ${i}\n`);
+		};
+		return { session };
+	};
+
+	await runSubagent({ ...baseOptions, onActivity: (activity) => updates.push(activity) });
+	const last = updates[updates.length - 1];
+	assert.equal(last.toolCalls.length, 20);
+	assert.equal(last.toolCalls[0].summary, "f5.ts", "oldest tool calls dropped first");
+	assert.equal(last.contentLines.length, 10);
+	assert.equal(last.contentLines[0], "line 5");
 });
 
 test("uses the last non-empty assistant message as the report", async () => {

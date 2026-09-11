@@ -180,14 +180,68 @@ One registered tool, **blocking**, params:
 3. **Bundled scout keeps `skills: on`.**
 4. **Reporting:** each SKILL.md the worker actually loads surfaces as a footer `decisionPoint` (skill name + why it
    matched); quiet when none.
-5. **TUI presentation (recommendation — revisit during implementation):** custom `renderCall`/`renderResult` per
-   child tool call. Collapsed: one status line per child — `role · task excerpt · status (queued/running/cancelled/
-   failed) · elapsed · usage`. Expanded: the child's streamed text (relayed from its event stream via `onUpdate`).
-   The final result renders the structured report distinctly (result body, decision points, open questions).
+5. **TUI presentation:** superseded by **§R11 — TUI observability** (map #30), which holds the full contract;
+   the live-view refinement of this item has been promoted there.
 6. **Worker-side restricted tool (from #14, #17):** the same tool, injected via `customTools`, but with no `agent`
    parameter — it **always spawns the bundled `scout`**; params: `task` + optional `model`/`thinkingLevel`.
    Parallel scouts from a worker are allowed under the same global cap. User-defined agents are never spawnable by
    workers; depth stays 1.
+
+### R11 — TUI observability (map #30)
+
+The full presentation and accounting contract for subagents in the orchestrator's TUI. Written off the
+Decisions-so-far of map "observability for the subagents extension" (tickets #31–#36, #38, #35); supersedes #27's
+original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Content line**, **Nested scout**,
+**Folded usage**.
+
+1. **Framing (#33):** the row renders itself (`renderShell: "self"`) inside a `DynamicBorder` in a role/status
+   color: role color while running (accent for worker, muted for scout), status color when settled
+   (success/error/warning). No background tint. The border is constant across states; content truncates to
+   terminal width.
+2. **Live collapsed view (#31):** custom `renderCall`/`renderResult` per child tool call. The running row shows a
+   **two-line header** — line 1: role · task excerpt; line 2: model (`provider/id`) · effective thinking level ·
+   elapsed · running tokens · live cost (4-decimal; omitted until the first usage-bearing message settles). Below:
+   the last **3** tool-call summary rows (`status marker · tool name · single primary target`: ✓ done, ✗ error,
+   ◦ running; no args, no results), then the last **3** content lines (raw, per-line display cap 100 + `…`).
+   The flat progress string is not part of the running row. Queued spawns render as one dim line
+   (`… queued · role · n ahead`) with no rows.
+3. **Expanded view (#32, as amended by #35):** expansion is the platform's global Ctrl+O (`options.expanded`); no
+   per-row affordance. **Running expanded** shows the same structure with every relayed row: all 20 tool-call ring
+   entries and all 10 content lines (per-line display cap 160) — the live *tail*, not a transcript.
+   **Settled expanded** is a hybrid: report body, structured footer sections in fixed order ending with
+   files-touched and the overflow-path line, provenance, and the full persisted tool-call list. Raw tool outputs
+   are never shown.
+4. **Nested scouts (#36):** a worker's scout spawn renders as an ordinary tool-call summary row among the worker's
+   rows (collapsed and expanded — flattened). The scout's internal activity is never relayed to the orchestrator.
+   Scout cost folds into the worker's total; no per-scout split, no depth marker. Depth-1 is an
+   extension-enforced invariant, not per-row information.
+5. **Payload contract (#35):** the tool result's `details` is a live/settled union, evolved additively — renderers
+   tolerate absent fields, no migration for in-flight sessions.
+   - **Live** (streamed via `onUpdate`, transient): `status: "running"` + activity — bounded progress tail
+     (~330 chars; the queued notice pre-run), tool-call ring (max **20**), content lines (ring max **10**, relay
+     cap **200 chars/line**, assistant text only), `model`, `effectiveThinkingLevel`, running `tokens`
+     (`{input, output}`), display-only `cost`.
+   - **Settled** (persisted — the replay source): `status`, `agent`, `report`, `footer`, `diagnostics`,
+     provenance (`modelUsed`, requested/effective thinking), `overflowPath`, `usage` (total-across-attempts),
+     `calls` — the **full** tool-call list, cap **1000** with an omission marker. Content lines are dropped at
+     settle (the report supersedes them).
+6. **Cost accounting (#34, #38):** a child's `getSessionStats()`, read once before dispose and returned once on
+   the tool result, is the **single accounting source**; the live relay cost is display-only and never feeds
+   accounting. The footer folds tool-result usage into its totals; the per-agent breakdown (`W:`/`S:`, initial
+   letter for user-defined agents) is an informational share of that total, never added on top. A cancelled
+   child's partial usage counts as real spend — the footer's `stopReason: aborted/error` skip stays scoped to
+   assistant messages; tool results are settled child-session totals and are always summed. A failed fallback
+   attempt's usage folds into the returned total, noted in diagnostics. **Compaction divergence (intentional):**
+   the footer aggregates post-compaction entries only, so pre-compaction subagent cost appears in `/session` and
+   RPC but not the footer — consistent with every footer segment; `/session` is the whole-session source of truth.
+7. **Narrow terminals (map fog, settled):** line-level truncation to terminal width only; every line (header,
+   tool rows, content lines) truncates independently and the row reflows line-by-line. No special narrow-mode
+   layout; sections never merge or drop.
+8. **Implementation status:** shipped — the bordered self-shell framing, two-line header (thinking level,
+   running tokens, 4-decimal cost), collapsed tool rows at 3, live payload thinking/tokens, the settled `calls`
+   list (cap 1000, omission marker, content lines dropped at settle), and failed-retry usage folding are
+   implemented and test-covered. The live relay cost stays display-only; the settled `usage` on the tool
+   result is the single accounting source.
 
 ## 4. Implementation plan
 
@@ -206,12 +260,12 @@ Phased so each step is testable in isolation; platform references are to the pi 
    overflow files, `details` payload, Esc handling, concurrency cap 4 + queue.
 5. **Output contract** — JSON footer parse with graceful degradation, provenance append, truncation.
 6. **Worker-side restricted tool** — scout-only injection via `customTools`, depth enforcement.
-7. **TUI presentation** — `renderCall`/`renderResult` per §R10.5 (revisit recommendation here).
+7. **TUI observability** — implemented per §R11: bordered self-shell framing, two-line live header, 3-row
+   collapsed tail, live payload thinking/tokens, settled `calls` list with omission marker, and failed-retry
+   usage folding.
 8. **Acceptance pass** — walk every requirement in §3 against the implementation; exercise parallel spawns, a
    runtime-failure fallback, an unparseable footer, an oversized report, Esc-cancel mid-run.
 
 ## 5. Open items (non-blocking)
 
-- §R10.5 TUI view content: pinned as a recommendation; finalize during implementation (per map fog, resolved for
-  spec purposes).
 - List-valued `skills` per role: deliberately deferred; additive later without breaking definitions (#19).

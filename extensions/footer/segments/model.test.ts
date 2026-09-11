@@ -16,12 +16,24 @@ const ctx = (overrides: Partial<SegmentContext>): SegmentContext => ({
 } as SegmentContext);
 
 test("combines GitHub Copilot usage into the model segment", () => {
+  // Low enough that the date-adjusted quota ratio stays in the "success" tier on
+  // every calendar day, so the passthrough theme renders the suffix uncolored.
+  const rendered = modelSegment.render(ctx({
+    providerUsage: { provider: "github-copilot", used: 100, total: 10_000 },
+  }));
+
+  assert.equal(rendered.content, "GPT-5.6 Terra (MEDIUM) (github-copilot:100/10000)");
+  assert.equal(rendered.visible, true);
+});
+
+test("colors the usage suffix by the date-adjusted quota tier", () => {
+  // 5051/10000 mid-month lands in the hex tier; applyColor emits raw ANSI for hex
+  // colors, so the visible text is the assertion, not the full styled string.
   const rendered = modelSegment.render(ctx({
     providerUsage: { provider: "github-copilot", used: 5051, total: 10_000 },
   }));
-
-  assert.equal(rendered.content, "GPT-5.6 Terra (MEDIUM) (github-copilot:5051/10000)");
-  assert.equal(rendered.visible, true);
+  assert.match(rendered.content, /github-copilot:5051\/10000/);
+  assert.match(rendered.content, /\x1b\[/, "hex tier applies ANSI regardless of theme");
 });
 
 test("retains a pending GitHub Copilot usage suffix while usage loads", () => {

@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-11
+
+### Added
+
+- The subagents extension's TUI rows now render their own shell per spec §R11 (SUBAGENTS_EXTENSION.md): each subagent/scout row is framed by a border in the role color while running (worker accent, scout muted) shifting to the status color when settled, with no background tint and line-level truncation to terminal width. The live row shows a two-line header — role · task excerpt, then model · effective thinking level · elapsed · running tokens · live cost (4-decimal) — with the last 3 tool-call summary rows and last 3 content lines collapsed (all expanded). The settled expanded view appends the full persisted tool-call list (capped at 1000 with an omission marker); content lines are dropped at settle. A failed fallback attempt's partial usage folds into the child's returned usage total and is noted in diagnostics.
+
 ## 2026-09-10
 
 ### Added
@@ -13,6 +19,8 @@ This log records notable functionality added to this configuration repository. S
 - Result transport: in-context results are capped at 10KB; oversized reports overflow to a session-scoped temp file (`$TMPDIR/pi-subagents/<session-id>/<spawn-id>.md`) whose path is referenced in the truncated in-context copy, with the full payload also available in the tool result's details.
 - A per-session `SpawnScheduler` enforces a concurrency cap (default 4, configurable via `~/.pi/agent/configs/subagents.json`) and queues excess spawns. Esc cancels running and queued children, each returning a partial-result report. A failing child never cancels its siblings.
 - Custom TUI rendering for subagent tool calls: collapsed status line per child (role, task excerpt, status, elapsed, usage) with the child's streamed output relayed live while running, and the final structured report (result body, decision points, open questions) rendered distinctly.
+- Live subagent activity view: while a child runs, its tool call is relayed as one-line summaries (`status marker · tool name · single primary target` — file path, command head, task excerpt, or URL; recent five collapsed, all expanded), the last three raw content lines of its visible generated text (per-line capped with an ellipsis marker), the child's current model, and a best-effort accumulated cost once the first usage-bearing message settles. Thinking output is never shown.
+- Subagent cost accounting in the footer: each subagent tool result now returns the child's total session usage (`getSessionStats()`-derived: input/output/cache tokens and cost, including nested scout spawns), so `/session`, RPC, the built-in footer, and this repo's custom footer all reflect child spend automatically. The custom footer folds tool-result usage into its totals (skipping only errored/aborted assistant messages) and shows a per-child cost breakdown keyed by agent name (`W:`/`S:` for the bundled agents, initial letter for user-defined); child costs are shares of the total, never added on top.
 
 ## 2026-09-03
 

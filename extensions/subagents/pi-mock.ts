@@ -16,11 +16,13 @@ export interface FakeSession {
 	aborted: boolean;
 	abortCount: number;
 	disposed: boolean;
+	stats: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number } | undefined;
 	subscribe(cb: (event: any) => void): () => void;
 	emit(event: unknown): void;
 	abort(): Promise<void>;
 	prompt(task: string): Promise<void>;
 	dispose(): void;
+	getSessionStats?(): { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number };
 }
 
 export interface FakeSessionConfig {
@@ -28,6 +30,8 @@ export interface FakeSessionConfig {
 	model?: { provider: string; id: string } | undefined;
 	thinkingLevel?: string;
 	errorMessage?: string;
+	/** Session totals returned by getSessionStats() (child usage capture). */
+	stats?: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number };
 	prompt?: (session: FakeSession) => Promise<void>;
 }
 
@@ -42,6 +46,8 @@ export function fakeSession(config: FakeSessionConfig = {}): FakeSession {
 		aborted: false,
 		abortCount: 0,
 		disposed: false,
+		stats: config.stats,
+		getSessionStats: config.stats ? () => session.stats! : undefined,
 		subscribe(cb: (event: any) => void) {
 			listeners.add(cb);
 			return () => listeners.delete(cb);
@@ -79,6 +85,25 @@ export function textDelta(session: FakeSession, delta: string): void {
 	session.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
 }
 
-export function toolStart(session: FakeSession, toolName: string): void {
-	session.emit({ type: "tool_execution_start", toolName });
+export function toolStart(session: FakeSession, toolName: string, args: unknown = {}, toolCallId?: string): void {
+	session.emit({ type: "tool_execution_start", toolCallId: toolCallId ?? toolName, toolName, args });
+}
+
+export function toolEnd(
+	session: FakeSession,
+	toolName: string,
+	opts: { toolCallId?: string; isError?: boolean } = {},
+): void {
+	session.emit({
+		type: "tool_execution_end",
+		toolCallId: opts.toolCallId ?? toolName,
+		toolName,
+		result: undefined,
+		isError: opts.isError ?? false,
+	});
+}
+
+/** A finalised message; usage.cost.total feeds the live cost relay. */
+export function messageEnd(session: FakeSession, message: Record<string, unknown> = {}): void {
+	session.emit({ type: "message_end", message: { role: "assistant", ...message } });
 }

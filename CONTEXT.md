@@ -46,6 +46,22 @@ _Avoid_: file dump, attachment
 The passing of context and results between the orchestrator and its subagents, and between subagents via the orchestrator.
 _Avoid_: ledger, transcript sharing, context dump
 
+**Tool-call summary**:
+The one-line digest of a subagent's tool call shown in the collapsed row: tool name + a single primary target (file path, command head, task excerpt, or URL) + a status marker. Deliberately excludes full arguments and results — those live in the expanded view.
+_Avoid_: tool log, call trace, activity entry (the payload record it renders from)
+
+**Content line**:
+A raw, unwrapped source line of a subagent's visible generated text (assistant text only; thinking/reasoning excluded). The collapsed row shows the last three; lines are shown raw — never markdown-stripped — with a per-line cap and `…` marker.
+_Avoid_: output line, transcript tail, display line
+
+**Nested scout**:
+A scout spawned by a worker via the restricted subagent tool. Visible to the orchestrator only as the worker's tool-call summary row for the scout call; its internal activity is never relayed, and its usage folds into the worker's cost.
+_Avoid_: grandchild spawn, second-level agent, scout-in-worker
+
+**Folded usage**:
+A child tool result's usage as the spawn's total cost across all attempts — including failed fallback retries and cancelled partial runs. The footer's per-agent breakdown is a share of that total, never additive.
+_Avoid_: per-attempt usage, last-attempt usage, incremental usage
+
 **Structured output**:
 The final report every subagent must produce: a role-specific markdown `result` plus a fenced JSON footer with `openQuestions[]`, `decisionPoints[]`, and `filesTouched[]`. The extension parses the footer; on parse failure the report degrades to plain `result` with a warning, never failing the child for format. Extension-appended provenance (model used, requested vs effective thinking level, fallback diagnostics) rides alongside.
 _Avoid_: summary, report format, JSON schema output

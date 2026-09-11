@@ -12,6 +12,8 @@
   - per-definition `tools` allowlist (required, fail-fast on unknown names)
   - session-wide concurrency cap + queue via `~/.pi/agent/configs/subagents.json`
 - The earlier "needed to clarify" items are resolved in the spec (map #12): handovers via self-contained task briefs (§R6), structured result contract with open questions and decision points relayed to the user by the orchestrator (§R7), and plan persistence left to the prompt layer (§R6.3, §2).
+- Better UI for subagents (map #12 → map #30, spec §R11 "TUI observability", fully implemented): while a child runs, its row is framed by a border in the role/status color (self-rendered shell) with a two-line header — role · task excerpt, then model · effective thinking · elapsed · running tokens · live cost — recent tool-call summary rows (`status marker · tool name · primary target`), and the last raw content lines of its generated text (per-line cap, `…` marker); collapsed shows the recent tail, expanded everything including the full settled tool-call list. The footer reflects subagent costs and the per-agent breakdown; failed fallback attempts' usage folds into the child's total.
+- Footer reflects subagent costs (map #12, ticket #34, research doc §6): subagent tool results return the child's total session usage, the custom footer folds tool-result usage into its totals, and the cost segment shows a per-child breakdown by agent name (`W:`/`S:`).
 
 ## Planned
 
@@ -21,5 +23,3 @@
 - Integrate workflow with Confluence — read documents as part of the initial context.
 - `researcher` might have access to Confluence and Jira to search for similar stories.
 - Scout should be able to explore git history of files for additional context (needs an implementation that does not burn through tokens).
-- Better UI for subagents: tool calls in rows, generated text readable, collapsible. Showing which model is currently used for subagent and associated cost (if available). Better styling (wrapped in the box maybe?)
-- Fix footer to display costs that would reflect our new subagents extension.
