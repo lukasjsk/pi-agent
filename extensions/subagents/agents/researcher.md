@@ -4,7 +4,7 @@ description: Research agent. Investigates a question against the live web using 
 tools: [read, grep, find, ls]
 model:
   - local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium
-  - github-copilot/gpt-5.6-luna@max
+  - github-copilot/gpt-5.6-luna@xhigh
 thinkingLevel: medium
 skills: on
 ---

@@ -73,7 +73,7 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 - `tools: [read, grep, find, ls]` — truly read-only, **no bash**.
 - `skills: on`; `thinkingLevel: low` (default for the parent fallback entry). Model chain (user-tuned):
   local `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (llama-server, free) →
-  `github-copilot/gpt-5.6-luna@max` → the orchestrator's model.
+  `github-copilot/gpt-5.6-luna@xhigh` → the orchestrator's model.
 - Report shape (fresh design, enforced by its prompt): Files Retrieved (exact `path:lines`) · Key Code (verbatim,
   within size budget) · Architecture (how pieces connect) · Start Here (which file first and why).
 - **Zero re-exploration quality bar**: a worker consuming a scout report must never need to re-read the same files —
@@ -83,8 +83,8 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 - `tools: [read, bash, edit, write, grep, find, ls]` + the restricted scout-spawning tool (injected via
   `customTools`, §R8).
 - `skills: on` (see §R10 for leverage behavior).
-- Model chain (user-tuned, medium-only — nothing higher):
-  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-terra@medium` →
+- Model chain (user-tuned):
+  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@max` →
   the orchestrator's model (`thinkingLevel: medium` covers the parent fallback entry).
 - Report shape (fresh design): what was done, files changed (paths + what), notes for the orchestrator.
 
@@ -99,7 +99,7 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
   validation is untouched.
 - `skills: on` (the firecrawl skills document the exact flags, carried in `options`); `thinkingLevel: medium`
   (default for the parent fallback entry). Model chain (user-tuned, same as scout):
-  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@max` →
+  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@xhigh` →
   the orchestrator's model.
 - Report shape: Summary · Findings · Sources (URL + saved file path) · Gaps. **Zero re-fetch quality bar**: every
   claim carries a source URL.

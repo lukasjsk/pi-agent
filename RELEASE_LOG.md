@@ -11,6 +11,7 @@ This log records notable functionality added to this configuration repository. S
 
 ### Changed
 
+- Tuned the bundled subagents' model chains: `scout` and `researcher` now pin `github-copilot/gpt-5.6-luna@xhigh` (was `@max`) in their cloud fallback entries, and `worker` moved from `github-copilot/gpt-5.6-terra@medium` to `github-copilot/gpt-5.6-luna@max` — worker is no longer medium-only, while its `thinkingLevel: medium` default still covers the local primary and the parent fallback entry.
 - The footer's per-subagent cost breakdown now renders in a fixed, stable order: the orchestrator's share (`O:`) first, then the bundled agents in the order `S:` (scout), `R:` (researcher), `W:` (worker), then user-defined agents by initial letter in the order they first appeared in the session. Previously the order followed whichever subagent results first appeared in the session, so the same agents could appear in different positions over time.
 
 ## 2026-09-14
