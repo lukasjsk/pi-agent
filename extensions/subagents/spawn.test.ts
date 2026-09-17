@@ -145,7 +145,7 @@ test("passes the requested model through to the child", async () => {
 		return { session: fakeSession() };
 	};
 	const model = { provider: "anthropic", id: "claude-opus-4-5" };
-	await runSubagent({ ...baseOptions, modelChain: [model] });
+	await runSubagent({ ...baseOptions, modelChain: [{ model }] });
 	assert.deepEqual(lastCaptured(captured).model, model);
 });
 
@@ -169,8 +169,8 @@ test("a runtime failure on the first chain entry retries the same task on the ne
 	const result = await runSubagent({
 		...baseOptions,
 		modelChain: [
-			{ provider: "a", id: "primary" },
-			{ provider: "b", id: "backup" },
+			{ model: { provider: "a", id: "primary"  } },
+			{ model: { provider: "b", id: "backup"  } },
 		],
 	});
 
@@ -200,8 +200,8 @@ test("an exhausted chain returns a failed result with per-candidate info — no 
 	const result = await runSubagent({
 		...baseOptions,
 		modelChain: [
-			{ provider: "a", id: "one" },
-			{ provider: "b", id: "two" },
+			{ model: { provider: "a", id: "one"  } },
+			{ model: { provider: "b", id: "two"  } },
 		],
 	});
 
@@ -212,6 +212,107 @@ test("an exhausted chain returns a failed result with per-candidate info — no 
 	assert.ok(result.diagnostics.some((d) => /provider one down/.test(d)));
 	assert.ok(result.diagnostics.some((d) => /provider two down/.test(d)));
 	assert.ok(result.diagnostics.some((d) => /runtime failure on a\/one.*retrying on b\/two/.test(d)));
+});
+
+test("a transient stream failure is retried on the same model before any fallback (§R4.2a)", async () => {
+	let createCalls = 0;
+	const error = "Upstream error from Together: Stream error: h2 protocol error: error reading a body from connection";
+	platformHooks.createAgentSession = async () => {
+		createCalls++;
+		if (createCalls === 1) {
+			return { session: fakeSession({ errorMessage: error, model: { provider: "a", id: "primary" } }) };
+		}
+		return {
+			session: fakeSession({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "report after retry" }] }],
+				model: { provider: "a", id: "primary" },
+			}),
+		};
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [{ model: { provider: "a", id: "primary" } }], // single entry — no fallback net
+		retryBackoffMs: 0,
+	});
+
+	assert.equal(createCalls, 2, "transient failure was retried on the same model");
+	assert.equal(result.status, "completed");
+	assert.equal(result.report, "report after retry");
+	assert.equal(result.fallbackFrom, undefined);
+	assert.ok(
+		result.diagnostics.some((d) => /transient failure on a\/primary.*retrying on the same model \(1\/2\)/.test(d)),
+		"transient retry is noted in diagnostics",
+	);
+});
+
+test("transient same-model retries are bounded; exhaustion returns a failed result", async () => {
+	let createCalls = 0;
+	platformHooks.createAgentSession = async () => {
+		createCalls++;
+		return { session: fakeSession({ errorMessage: "Stream error: h2 protocol error", model: { provider: "a", id: "primary" } }) };
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [{ model: { provider: "a", id: "primary" } }],
+		retryBackoffMs: 0,
+	});
+
+	assert.equal(createCalls, 3, "initial attempt + 2 transient retries");
+	assert.equal(result.status, "failed");
+	assert.equal(result.fallbackFrom, undefined);
+	assert.ok(result.diagnostics.some((d) => /\(2\/2\)/.test(d)), "the last retry is noted");
+});
+
+test("exhausted transient retries on an entry continue down the chain (§R4.2)", async () => {
+	const attempts: string[] = [];
+	platformHooks.createAgentSession = async (options) => {
+		const id = (options.model as { id: string }).id;
+		attempts.push(id);
+		if (id === "one") {
+			return { session: fakeSession({ errorMessage: "fetch failed", model: { provider: "a", id: "one" } }) };
+		}
+		return {
+			session: fakeSession({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "report from backup" }] }],
+				model: { provider: "b", id: "two" },
+			}),
+		};
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [
+			{ model: { provider: "a", id: "one"  } },
+			{ model: { provider: "b", id: "two"  } },
+		],
+		retryBackoffMs: 0,
+	});
+
+	assert.deepEqual(attempts, ["one", "one", "one", "two"], "3 transient retries on the entry, then the next one");
+	assert.equal(result.status, "completed");
+	assert.equal(result.modelUsed, "b/two");
+	assert.deepEqual(result.fallbackFrom, ["a/one"]);
+	assert.ok(result.diagnostics.some((d) => /runtime failure on a\/one.*retrying on b\/two/.test(d)));
+});
+
+test("a non-transient runtime failure skips same-model retry and goes straight to the chain", async () => {
+	let createCalls = 0;
+	platformHooks.createAgentSession = async () => {
+		createCalls++;
+		return { session: fakeSession({ errorMessage: "auth revoked", model: { provider: "a", id: "primary" } }) };
+	};
+
+	const result = await runSubagent({
+		...baseOptions,
+		modelChain: [{ model: { provider: "a", id: "primary" } }],
+		retryBackoffMs: 0,
+	});
+
+	assert.equal(createCalls, 1, "no same-model retry for non-transient errors");
+	assert.equal(result.status, "failed");
+	assert.ok(result.diagnostics.some((d) => /auth revoked/.test(d)));
 });
 
 test("a cancelled child does not trigger a fallback retry", async () => {
@@ -232,8 +333,8 @@ test("a cancelled child does not trigger a fallback retry", async () => {
 	const run = runSubagent({
 		...baseOptions,
 		modelChain: [
-			{ provider: "a", id: "one" },
-			{ provider: "b", id: "two" },
+			{ model: { provider: "a", id: "one"  } },
+			{ model: { provider: "b", id: "two"  } },
 		],
 		signal: controller.signal,
 	});
@@ -264,6 +365,37 @@ test("passes the definition's thinkingLevel to the child session", async () => {
 	};
 	await runSubagent({ ...baseOptions, definition: { ...scout, thinkingLevel: "high" } });
 	assert.equal(lastCaptured(captured).thinkingLevel, "high");
+});
+
+test("a per-entry \"ref@level\" pin wins over the definition level; a per-spawn override wins over both", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return {
+			session: fakeSession({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+			}),
+		};
+	};
+
+	// Pinned first entry rides its pin; provenance reports the pinned request.
+	const result = await runSubagent({
+		...baseOptions,
+		definition: { ...scout, thinkingLevel: "low" },
+		modelChain: [{ model: { provider: "a", id: "pinned" }, thinkingLevel: "medium" }],
+	});
+	assert.equal(captured[0].thinkingLevel, "medium");
+	assert.equal(result.requestedThinkingLevel, "medium");
+
+	// A per-spawn override beats the pin.
+	const override = await runSubagent({
+		...baseOptions,
+		definition: { ...scout, thinkingLevel: "low" },
+		modelChain: [{ model: { provider: "a", id: "pinned" }, thinkingLevel: "medium" }],
+		thinkingLevel: "max",
+	});
+	assert.equal(lastCaptured(captured).thinkingLevel, "max");
+	assert.equal(override.requestedThinkingLevel, "max");
 });
 
 test("skills: off disables skill discovery in the child", async () => {
@@ -387,8 +519,8 @@ test("a failed fallback attempt's usage folds into the returned total and is not
 	const result = await runSubagent({
 		...baseOptions,
 		modelChain: [
-			{ provider: "a", id: "primary" },
-			{ provider: "b", id: "backup" },
+			{ model: { provider: "a", id: "primary"  } },
+			{ model: { provider: "b", id: "backup"  } },
 		],
 	});
 

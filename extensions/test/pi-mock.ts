@@ -69,6 +69,24 @@ export function installPiCodingAgentMock(): void {
 	mock.module("@earendil-works/pi-coding-agent", () => piCodingAgentMock);
 }
 
+// typebox is only resolvable under Pi's module aliases, not from this repo. One shared
+// superset stub (Object/String/Optional plus the Array/Union/Literal/Literal the
+// subagents schemas use) so no suite's typebox mock can poison another's process-global
+// bun mock, regardless of load order. The shapes are inert — suites assert on behavior,
+// not on the schema objects these return.
+export function installTypeboxMock(): void {
+	mock.module("typebox", () => ({
+		Type: {
+			Object: (properties: unknown) => ({ type: "object", properties }),
+			String: (options: unknown = {}) => ({ type: "string", ...(options as object) }),
+			Optional: (schema: unknown) => schema,
+			Array: (schema: unknown = {}) => ({ type: "array", items: schema }),
+			Union: (schemas: unknown, options: unknown = {}) => ({ type: "union", anyOf: schemas, ...(options as object) }),
+			Literal: (value: unknown) => ({ type: "literal", const: value }),
+		},
+	}));
+}
+
 // Same story for @earendil-works/pi-tui: footer needs width helpers, subagents needs
 // the Text component. One shape for the whole repo.
 export const piTuiMock = {

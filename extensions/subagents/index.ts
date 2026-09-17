@@ -18,6 +18,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
+import { createFirecrawlTools } from "./firecrawl.ts";
 import { runSubagent, type ChildUsage, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
@@ -87,10 +88,15 @@ export interface SubagentDeps {
 	/** Custom tools injected into worker child sessions (§R10.6): the restricted scout spawner.
 	 *  Absent in tests unless wired explicitly. */
 	childTools?: () => ToolDefinition[];
+	/** Custom tools injected into researcher child sessions: the firecrawl web-research tools
+	 *  (replacing raw bash). Absent in tests unless wired explicitly. */
+	researcherTools?: () => ToolDefinition[];
 }
 
 /** The worker role name — the only definition whose children receive the restricted scout tool. */
 export const WORKER_AGENT_NAME = "worker";
+/** The researcher role name — the only definition whose children receive the firecrawl web-research tools. */
+export const RESEARCHER_AGENT_NAME = "researcher";
 /** Name of the restricted subagent tool injected into worker sessions (spec §R10.6). */
 export const SCOUT_TOOL_NAME = "scout";
 
@@ -206,7 +212,10 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 
 		// Depth-1 nesting (§R10.6): only the worker's children receive the restricted scout
 		// tool; scouts and user-defined agents never do, and no child gets the general tool.
-		const childTools = definition.name === WORKER_AGENT_NAME ? deps.childTools?.() : undefined;
+		// The researcher's children receive the firecrawl web-research tools instead (no bash).
+		let childTools: ToolDefinition[] | undefined;
+		if (definition.name === WORKER_AGENT_NAME) childTools = deps.childTools?.();
+		else if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
 
 		const result = await deps.scheduler.run(
 			() =>
@@ -326,6 +335,8 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 	// The restricted scout tool for worker children must see the SAME deps object (same
 	// scheduler, registry, overflow root) — it closes over `deps`, not a copy.
 	deps.childTools = () => [createScoutTool(deps)];
+	// Firecrawl web-research tools for researcher children (design A: injected, no bash).
+	deps.researcherTools = () => createFirecrawlTools();
 	return deps;
 }
 

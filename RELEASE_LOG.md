@@ -2,6 +2,24 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-17
+
+### Added
+
+- Subagent model fallback gained two capabilities (spec `SUBAGENTS_EXTENSION.md` §R4): **per-entry thinking-level pins** — a `model` entry may end in an `@level` suffix (e.g. `github-copilot/gpt-5.6-luna@max`) to pin the thinking level for that chain entry alone; the split happens on the last `@` so model ids may legally contain one, and an unknown level fails the spawn with a clear diagnostic. And an **always-on parent fallback** — the orchestrator's current model is appended as the final entry of every resolved definition chain (deduped by ref id, so a definition listing the parent's own model does not run it twice), meaning an exhausted or unavailable list (e.g. the local server down) lands on the orchestrator's model instead of failing the spawn. Requested-level precedence: per-spawn `thinkingLevel` param > entry pin > definition default; a per-spawn `model` override stays definitive with no fallback net.
+- The bundled subagents now ship explicit model chains: `scout` and `researcher` run `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (local llama-server, zero cost) → `github-copilot/gpt-5.6-luna@max` → the orchestrator's model; `worker` runs the same local primary → `github-copilot/gpt-5.6-terra@medium`, with `thinkingLevel: medium` as the default so its parent fallback entry also stays medium (worker is deliberately medium-only, never higher).
+
+## 2026-09-14
+
+### Added
+
+- A third bundled subagent, `researcher`, for live-web research. It runs read-only against the workspace (read/grep/find/ls) and — unlike the other roles — has no `bash`. Its live-web surface is a set of purpose-built `firecrawl_*` tools (`firecrawl_search`, `firecrawl_scrape`, `firecrawl_map`, `firecrawl_crawl`, `firecrawl_research`, `firecrawl_developer`) injected into the child session through the existing `childTools` path (the same wiring that gives a worker its restricted scout tool). Each tool wraps one firecrawl CLI subcommand via `execFile` (no shell): the subcommand and its primary argument(s) are typed parameters and extra flags ride in an `options` string array of individual argv tokens, so the researcher cannot run arbitrary commands. It returns a compressed report (`Summary` / `Findings` / `Sources` / `Gaps`) where every claim carries a source URL. New files: `extensions/subagents/agents/researcher.md` (agent definition, `bash` removed) and `extensions/subagents/firecrawl.ts` (the tool set, unit-tested in `firecrawl.test.ts`).
+
+### Changed
+
+- Transient provider/stream failures (dropped h2 streams, connection resets, timeouts, overload) are now retried on the **same** model up to twice with short backoff before any model-chain fallback (`spawn.ts`, §R4.2a). Previously a mid-stream upstream disconnect on a single-entry chain — the common case for definitions without a `model` list, which run on the parent's model — returned a truncated partial report marked `[failed]` with no retry, forcing the orchestrator to notice and re-dispatch manually. Spent usage folds into the child total (§R11.6); each retry is noted in diagnostics. Non-transient failures (auth, bad request) skip straight to chain fallback as before.
+- The `typebox` test mock is now centralized in `extensions/test/pi-mock.ts` (`installTypeboxMock`, a superset of the shapes the subagents schemas use). Bun's `mock.module` registry is process-global across test files, so the subagents suites previously each registered their own inline `typebox` stub and whichever file loaded later won — a superset stub shared by all suites removes that poisoning (surfaced by the new `firecrawl` suite).
+
 ## 2026-09-11
 
 ### Added

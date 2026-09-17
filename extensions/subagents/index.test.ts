@@ -1,21 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mock } from "bun:test";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
 
 import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart } from "./pi-mock.ts";
-import { installPiTuiMock } from "../test/pi-mock.ts";
+import { installPiTuiMock, installTypeboxMock } from "../test/pi-mock.ts";
 
-// typebox is only resolvable under Pi's module aliases, not from this repo.
-mock.module("typebox", () => ({
-	Type: {
-		Object: (properties: unknown) => ({ type: "object", properties }),
-		String: (options: unknown = {}) => ({ type: "string", ...(options as object) }),
-		Optional: (schema: unknown) => schema,
-	},
-}));
-
+installTypeboxMock();
 installPlatformMock();
 installPiTuiMock();
 

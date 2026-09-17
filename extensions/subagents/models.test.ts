@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ModelResolutionError, parseModelRef, resolveModelChain, type ModelRegistryLike } from "./models.ts";
+import {
+	ModelResolutionError,
+	parseModelEntry,
+	parseModelRef,
+	refId,
+	resolveModelChain,
+	type ModelRegistryLike,
+} from "./models.ts";
 
 function model(provider: string, id: string) {
 	return { provider, id };
@@ -34,8 +41,10 @@ test("per-spawn override replaces the list entirely — even a fully unusable li
 		overrideModel: "a/override",
 		registry: registry([{ provider: "a", id: "override" }]), // "ghost/none" not in catalogue
 	});
-	assert.deepEqual(resolved.chain, [{ provider: "a", id: "override" }]);
+	assert.deepEqual(resolved.chain, [{ model: { provider: "a", id: "override" } }]);
 	assert.deepEqual(resolved.diagnostics, []);
+	// The override is definitive: no parent fallback net is appended.
+	assert.equal(resolved.chain.length, 1);
 });
 
 test("an override not in the registry is a spawn error", () => {
@@ -53,7 +62,7 @@ test("the first list entry with valid auth wins; unusable entries are skipped wi
 			[{ provider: "b", id: "ok" }], // a/unauthed is registered but has no valid auth
 		),
 	});
-	assert.deepEqual(resolved.chain, [{ provider: "b", id: "ok" }]);
+	assert.deepEqual(resolved.chain, [{ model: { provider: "b", id: "ok" } }]);
 	assert.deepEqual(resolved.diagnostics, [
 		"skipped ghost/none (not in the model catalogue)",
 		"skipped a/unauthed (no valid auth)",
@@ -99,12 +108,12 @@ test("chain entries are the registry's full model objects, not parsed {provider,
 			getAvailable: () => [fullModel],
 		},
 	});
-	assert.equal(resolved.chain[0], fullModel); // identity: the child needs reasoning/api/etc.
+	assert.equal(resolved.chain[0].model, fullModel); // identity: the child needs reasoning/api/etc.
 });
 
 test("no list and no override → the parent's model, or the platform default when absent", () => {
 	const withParent = resolveModelChain({ parentModel: { provider: "p", id: "m" } });
-	assert.deepEqual(withParent.chain, [{ provider: "p", id: "m" }]);
+	assert.deepEqual(withParent.chain, [{ model: { provider: "p", id: "m" } }]);
 
 	const withoutParent = resolveModelChain({});
 	assert.deepEqual(withoutParent.chain, []);
@@ -113,4 +122,49 @@ test("no list and no override → the parent's model, or the platform default wh
 
 test("a malformed parent model object is ignored rather than crashing", () => {
 	assert.deepEqual(resolveModelChain({ parentModel: "not-a-model" }).chain, []);
+});
+
+test("parseModelEntry splits a trailing @level pin from the ref", () => {
+	assert.deepEqual(parseModelEntry("a/b"), { model: { provider: "a", id: "b" } });
+	assert.deepEqual(parseModelEntry("a/b@max"), { model: { provider: "a", id: "b" }, thinkingLevel: "max" });
+	// Splits on the LAST @ — model ids may legally contain one.
+	assert.deepEqual(parseModelEntry("a/b@c@low"), { model: { provider: "a", id: "b@c" }, thinkingLevel: "low" });
+	// Levels are case-insensitive.
+	assert.deepEqual(parseModelEntry("a/b@MEDIUM"), { model: { provider: "a", id: "b" }, thinkingLevel: "medium" });
+});
+
+test("parseModelEntry rejects an unknown thinking level", () => {
+	assert.throws(
+		() => parseModelEntry("a/b@ultra"),
+		(error: unknown) => /invalid thinking level "@ultra"/.test(String(error)),
+	);
+});
+
+test("the parent's model is appended as the final chain entry, deduped by ref id", () => {
+	const parent = { provider: "p", id: "parent" };
+	const resolved = resolveModelChain({
+		definitionModel: ["b/ok", "p/parent"],
+		registry: registry([{ provider: "b", id: "ok" }, parent]),
+		parentModel: parent,
+	});
+	assert.deepEqual(resolved.chain.map((e) => refId(e.model)), ["b/ok", "p/parent"]);
+});
+
+test("a fully exhausted list lands on the parent's model instead of failing", () => {
+	const parent = { provider: "p", id: "parent" };
+	const resolved = resolveModelChain({
+		definitionModel: ["ghost/none", "a/unauthed"],
+		registry: registry([{ provider: "a", id: "unauthed" }], []),
+		parentModel: parent,
+	});
+	assert.deepEqual(resolved.chain, [{ model: parent }]);
+	assert.equal(resolved.diagnostics.length, 2);
+});
+
+test("per-entry thinking pins survive resolution; unpinned entries stay unpinned", () => {
+	const resolved = resolveModelChain({
+		definitionModel: ["a/local@medium", "b/terra"],
+		registry: registry([{ provider: "a", id: "local" }, { provider: "b", id: "terra" }]),
+	});
+	assert.deepEqual(resolved.chain.map((e) => e.thinkingLevel), ["medium", undefined]);
 });

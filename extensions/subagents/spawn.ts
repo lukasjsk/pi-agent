@@ -6,7 +6,8 @@
 //                                  the child receives none of the parent's conversation
 //   - tools                      → the definition's allowlist; unknown names fail the spawn fast
 //   - cwd                        → inherited from the orchestrator, not a per-spawn override
-//   - thinkingLevel              → the definition's requested level; the platform clamps to model capabilities
+//   - thinkingLevel              → per-spawn override ?? per-entry "ref@level" pin ?? the
+//                                  definition's level; the platform clamps to model capabilities
 //   - skills                     → definition-controlled (skills: off → noSkills); context files stay ON (§R1.4)
 
 import {
@@ -18,7 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition, AgentThinkingLevel } from "./definitions.ts";
 import { parseStructuredReport, type StructuredFooter } from "./report.ts";
-import { refId, type ModelRef } from "./models.ts";
+import { refId, type ChainEntry, type ModelRef } from "./models.ts";
 import { toolCallSummary } from "./summary.ts";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
@@ -75,7 +76,8 @@ export interface SubagentResult {
 	diagnostics: string[];
 	/** model actually used, "provider/id" — provenance is extension-collected, never child-authored. */
 	modelUsed?: string;
-	/** Requested thinking level (definition or per-spawn override), if one was set. */
+	/** Requested thinking level (per-spawn override, per-entry "ref@level" pin, or
+	 *  definition), if one was set. */
 	requestedThinkingLevel?: AgentThinkingLevel;
 	/** Effective level after the platform's clamp to model capabilities, if the child session reports it. */
 	effectiveThinkingLevel?: string;
@@ -85,6 +87,9 @@ export interface SubagentResult {
 	 *  returned on the tool result so /session, RPC, and the footer reflect it (research doc §6).
 	 *  Usage from failed fallback attempts folds in here (§R11.6). */
 	usage?: ChildUsage;
+	/** Raw child error message (provider/stream failure) when the attempt errored; drives
+	 *  transient-retry classification (§R4.2a). Absent on completed/cancelled runs. */
+	error?: string;
 	/** The child's full tool-call list for the settled expanded view (§R11.5): capped at
 	 *  CALLS_CAP with the oldest dropped; callsOmitted counts what did not fit. */
 	calls?: readonly SubagentToolCallSummary[];
@@ -100,8 +105,9 @@ export interface SpawnRunOptions {
 	/** Override for tests; defaults to getAgentDir(). */
 	agentDir?: string;
 	/** Resolved chain (§R4); empty/undefined lets the platform resolve from settings.
-	 *  On a runtime failure the next entry retries the same task (partial progress discarded). */
-	modelChain?: readonly (ModelRef | undefined)[];
+	 *  Each entry may carry a per-entry thinking pin; on a runtime failure the next entry
+	 *  retries the same task (partial progress discarded). */
+	modelChain?: readonly (ChainEntry | undefined)[];
 	/** Skip notes from chain resolution (unauthed/uncatalogued entries). */
 	modelDiagnostics?: string[];
 	/** Requested thinking level (per-spawn override ?? definition); the platform clamps per model. */
@@ -113,6 +119,8 @@ export interface SpawnRunOptions {
 	 *  Their names are appended to the tools allowlist per the SDK contract; only the caller
 	 *  (orchestrator executor) decides which definitions get them — depth stays 1. */
 	childTools?: ToolDefinition[];
+	/** Backoff before each transient same-model retry (§R4.2a); tests pass 0. */
+	retryBackoffMs?: number;
 }
 
 /** Platform built-in tool names (sdk.md "Tools"). */
@@ -139,6 +147,25 @@ const TOOL_CALL_TAIL = 20;
 /** Settled calls-list cap (§R11.5): the full list up to 1000, oldest dropped. */
 const CALLS_CAP = 1000;
 
+/** Bounded same-model retries for transient mid-run failures (§R4.2a), plus the backoff
+ *  base (doubled per retry: 1s, 2s). */
+const TRANSIENT_RETRIES = 2;
+const RETRY_BACKOFF_BASE_MS = 1000;
+
+/** Provider/stream errors worth retrying on the SAME model (§R4.2a): dropped connections,
+ *  mid-stream transport failures, timeouts, provider overload. Deliberately narrow —
+ *  anything else (auth, context limits, bad requests) goes straight to chain fallback. */
+export function isTransientError(message: string | undefined): boolean {
+	if (!message) return false;
+	return /stream error|h2 protocol|error reading a body|econnreset|econnrefused|etimedout|socket hang up|fetch failed|overloaded|rate.?limit/i.test(
+		message,
+	);
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function runSubagent(options: SpawnRunOptions): Promise<SubagentResult> {
 	const { definition, cwd, signal } = options;
 	validateToolNames(definition);
@@ -157,20 +184,52 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 	});
 	await loader.reload();
 
-	const thinkingLevel = options.thinkingLevel ?? definition.thinkingLevel;
 	const diagnostics: string[] = [...(options.modelDiagnostics ?? []), ...definition.warnings];
 	const fallbackFrom: string[] = [];
 
 	// One attempt per chain entry; an empty chain is a single platform-default attempt.
-	const chain: readonly (ModelRef | undefined)[] =
+	const chain: readonly (ChainEntry | undefined)[] =
 		options.modelChain && options.modelChain.length > 0 ? options.modelChain : [undefined];
 
 	for (let attempt = 0; attempt < chain.length; attempt++) {
-		const model = chain[attempt];
-		const result = await runOnce({ options, agentDir, loader, model, thinkingLevel });
+		const entry = chain[attempt];
+		const model = entry?.model;
+		// Per-attempt requested level: per-spawn override wins over the entry's "@level"
+		// pin, which wins over the definition's default (spec §R2.2).
+		const thinkingLevel = options.thinkingLevel ?? entry?.thinkingLevel ?? definition.thinkingLevel;
+		let result = await runOnce({ options, agentDir, loader, model, thinkingLevel });
 		for (const d of result.diagnostics) {
 			if (!diagnostics.includes(d)) diagnostics.push(d); // retry attempts repeat footer warnings; keep once
 		}
+
+		// Transient same-model retry (§R4.2a): a dropped stream/connection is retried on the
+		// SAME model before any chain fallback — a single-entry chain (definition without a
+		// `model` list, running on the parent's model) has no next entry at all, and a blip
+		// should not silently switch models mid-task. Partial progress is discarded; the
+		// failed attempts' spend folds into the child's total (§R11.6); each retry is noted.
+		for (
+			let retry = 1;
+			result.status === "failed" &&
+			isTransientError(result.error) &&
+			!options.signal?.aborted &&
+			retry <= TRANSIENT_RETRIES;
+			retry++
+		) {
+			foldedUsage = mergeUsage(foldedUsage, result.usage);
+			const failedOn = model ? refId(model) : "the platform default model";
+			const spent = result.usage?.cost.total;
+			diagnostics.push(
+				`transient failure on ${failedOn}: ${result.error}` +
+					(spent ? ` ($${spent.toFixed(4)} of partial usage folded into the child's total)` : "") +
+					`, retrying on the same model (${retry}/${TRANSIENT_RETRIES})`,
+			);
+			await delay((options.retryBackoffMs ?? RETRY_BACKOFF_BASE_MS) * 2 ** (retry - 1));
+			result = await runOnce({ options, agentDir, loader, model, thinkingLevel });
+			for (const d of result.diagnostics) {
+				if (!diagnostics.includes(d)) diagnostics.push(d);
+			}
+		}
+
 		const hasNext = attempt < chain.length - 1;
 
 		if (result.status === "failed" && hasNext) {
@@ -179,7 +238,8 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 			// and note it in diagnostics (§R11.6).
 			foldedUsage = mergeUsage(foldedUsage, result.usage);
 			const failedOn = model ? refId(model) : "the platform default model";
-			const nextOn = chain[attempt + 1] ? refId(chain[attempt + 1]!) : "the platform default model";
+			const next = chain[attempt + 1];
+			const nextOn = next ? refId(next.model) : "the platform default model";
 			const spent = result.usage?.cost.total;
 			diagnostics.push(
 				`runtime failure on ${failedOn}; partial progress discarded` +
@@ -346,6 +406,7 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			report: parsed.result,
 			footer: parsed.footer,
 			diagnostics: attemptDiagnostics,
+			error: errorMessage,
 			modelUsed,
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
@@ -353,13 +414,15 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			...settledCalls(toolCalls),
 		};
 	} catch (error) {
-		attemptDiagnostics.push(`child failed: ${error instanceof Error ? error.message : String(error)}`);
+		const message = error instanceof Error ? error.message : String(error);
+		attemptDiagnostics.push(`child failed: ${message}`);
 		return {
 			status: "failed",
 			agent: definition.name,
 			report: streamed,
 			footer: { openQuestions: [], decisionPoints: [], filesTouched: [] },
 			diagnostics: attemptDiagnostics,
+			error: message,
 			modelUsed: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
 			requestedThinkingLevel: thinkingLevel,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),

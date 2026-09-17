@@ -9,7 +9,7 @@ The top-level interactive pi session that spawns subagents, sequences them, and 
 _Avoid_: parent agent, main agent, controller
 
 **Subagent**:
-A child pi agent session spawned via the subagent tool: isolated context, ephemeral, non-interactive, running a fixed role (worker or scout).
+A child pi agent session spawned via the subagent tool: isolated context, ephemeral, non-interactive, running a fixed role (worker, scout, or researcher).
 _Avoid_: child agent, task agent, delegate
 
 **Worker**:
@@ -18,7 +18,11 @@ _Avoid_: implementer, doer
 
 **Scout**:
 The exploration subagent that reconnoiters the workspace and returns a compressed report. A leaf: it cannot spawn further subagents.
-_Avoid_: explorer, researcher (researcher is a planned future subagent for web research — different scope)
+_Avoid_: explorer
+
+**Researcher**:
+The web-research subagent that investigates a question against the live web and returns a compressed, source-cited report. Read-only against the workspace (no bash); its live-web capability is a set of injected `firecrawl_*` tools (not a frontmatter tool). A leaf: it cannot spawn further subagents.
+_Avoid_: web agent, crawler (crawler is one firecrawl tool, not the role)
 
 **Spawn**:
 The act of starting a subagent session via the subagent tool, singly or in parallel.
@@ -31,7 +35,7 @@ The variant of the subagent tool injected into a worker session that can spawn o
 How many subagent levels nest below the orchestrator. Capped at 1: orchestrator → worker → scout.
 
 **Agent definition**:
-A user-editable markdown file (YAML frontmatter + body) that defines a spawnable subagent role: config fields in frontmatter, the system prompt in the body. Bundled worker/scout defaults live in the extension; user-level files override by name.
+A user-editable markdown file (YAML frontmatter + body) that defines a spawnable subagent role: config fields in frontmatter, the system prompt in the body. Bundled worker/scout/researcher defaults live in the extension; user-level files override by name.
 _Avoid_: agent config, agent spec
 
 **Model fallback**:

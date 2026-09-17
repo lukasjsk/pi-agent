@@ -11,16 +11,13 @@ Domain language: see [CONTEXT.md](CONTEXT.md). Source task: [PLANNED_FEATURES.md
 ## 1. Goal
 
 A pi extension that lets the top-level interactive session (the **orchestrator**) delegate work to isolated,
-non-interactive child agent sessions (**subagents**) via a general subagent-spawning tool, with `worker` and `scout`
-shipped as bundled agent definitions. Users can define their own agents; a future `researcher` slots in without an
-extension update.
+non-interactive child agent sessions (**subagents**) via a general subagent-spawning tool, with `worker`, `scout`, and
+`researcher` shipped as bundled agent definitions. Users can define their own agents on top.
 
 ## 2. Non-goals (out of scope)
 
 - New `/analyze-and-plan` and `/implement-and-review` prompts — a separate effort built on this extension. That layer
   also owns "persist the plan for later" (ask the user; orchestrator writes files itself — no extension mechanism).
-- `researcher` subagent — future work; only its extension point is a design constraint here (it's just another agent
-  definition).
 - Scout git-history exploration (token-efficient) — separate concern, potentially its own map.
 - Orchestrator workflow policies — how the orchestrator decides what to delegate, review loops, question-presentation
   policy. Live in the prompt/workflow layer.
@@ -53,11 +50,14 @@ extension update.
    - `name` — spawn identifier (unique)
    - `description` — when to use it; feeds the subagent tool description so the orchestrator picks correctly
    - `tools` — **required** tool allowlist (array of tool names; see §R5)
-   - `model` — ordered fallback list (see §R4)
-   - `thinkingLevel` — one of the platform levels; platform clamps to model capabilities
+   - `model` — ordered fallback list (see §R4); an entry may pin its thinking level via the
+     `provider/model-id@level` suffix (e.g. `github-copilot/gpt-5.6-terra@max`) — unpinned entries
+     use the agent's `thinkingLevel` default
+   - `thinkingLevel` — default thinking level for unpinned chain entries (and the parent fallback);
+     one of the platform levels; platform clamps to model capabilities
    - `skills` — `on` / `off`, **default `on`** (see §R10)
 3. The markdown body is the agent's system prompt, applied via `systemPromptOverride` in `DefaultResourceLoader`.
-4. **Bundled definitions** ship inside the extension: `worker` and `scout` (§R3).
+4. **Bundled definitions** ship inside the extension: `worker`, `scout`, and `researcher` (§R3).
 5. **User-level override:** a file in `~/.pi/agent/agents/*.md` whose `name` matches a bundled name **replaces** it.
    There are **no project-level definitions** (hermetic posture).
 6. **Discovery is fresh on every spawn** — mid-session edits take effect immediately. A corrupt/invalid definition
@@ -67,11 +67,13 @@ extension update.
 
 ### R3 — Bundled agents (from #15, #18, #19)
 
-Two bundled definitions, freshly designed (deprecated prompts are reference only):
+Three bundled definitions, freshly designed (deprecated prompts are reference only):
 
 **`scout`** — exploration; returns compressed context.
 - `tools: [read, grep, find, ls]` — truly read-only, **no bash**.
-- `skills: on`; `thinkingLevel: low` suggested.
+- `skills: on`; `thinkingLevel: low` (default for the parent fallback entry). Model chain (user-tuned):
+  local `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (llama-server, free) →
+  `github-copilot/gpt-5.6-luna@max` → the orchestrator's model.
 - Report shape (fresh design, enforced by its prompt): Files Retrieved (exact `path:lines`) · Key Code (verbatim,
   within size budget) · Architecture (how pieces connect) · Start Here (which file first and why).
 - **Zero re-exploration quality bar**: a worker consuming a scout report must never need to re-read the same files —
@@ -81,9 +83,28 @@ Two bundled definitions, freshly designed (deprecated prompts are reference only
 - `tools: [read, bash, edit, write, grep, find, ls]` + the restricted scout-spawning tool (injected via
   `customTools`, §R8).
 - `skills: on` (see §R10 for leverage behavior).
+- Model chain (user-tuned, medium-only — nothing higher):
+  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-terra@medium` →
+  the orchestrator's model (`thinkingLevel: medium` covers the parent fallback entry).
 - Report shape (fresh design): what was done, files changed (paths + what), notes for the orchestrator.
 
-Both bundled prompts must: mandate the structured output contract (§R7), instruct **before/after provenance is
+**`researcher`** — live-web research; returns a compressed, source-cited report.
+- `tools: [read, grep, find, ls]` — read-only against the workspace, **no bash**. Its live-web surface is not in the
+  frontmatter allowlist: a set of purpose-built `firecrawl_*` tools (`firecrawl_search`, `firecrawl_scrape`,
+  `firecrawl_map`, `firecrawl_crawl`, `firecrawl_research`, `firecrawl_developer`) is **injected via `customTools`**
+  (the same path as the worker's scout tool, §R8/§R10.6) and appended to the child's tool list at session creation.
+  Each tool wraps one firecrawl CLI subcommand via `execFile` (no shell): the subcommand + primary argument(s) are
+  typed parameters, extra flags ride in an `options` string array of individual argv tokens, so a researcher cannot
+  run arbitrary commands. Because these names never appear in the frontmatter `tools` list, §R5.2's unknown-name
+  validation is untouched.
+- `skills: on` (the firecrawl skills document the exact flags, carried in `options`); `thinkingLevel: medium`
+  (default for the parent fallback entry). Model chain (user-tuned, same as scout):
+  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@max` →
+  the orchestrator's model.
+- Report shape: Summary · Findings · Sources (URL + saved file path) · Gaps. **Zero re-fetch quality bar**: every
+  claim carries a source URL.
+
+All bundled prompts must: mandate the structured output contract (§R7), instruct **before/after provenance is
 extension-appended** (never child-authored), and — for worker — carry the **skill selection guidance** (§R10).
 
 ### R4 — Model fallback (from #16)
@@ -94,9 +115,19 @@ An agent definition's `model` is an **ordered list**. Resolution pipeline:
    on the first usable model.
 2. **Runtime failure** (provider error mid-task): transparently retry the same task on the **next** entry. Partial
    child progress is discarded; the retry is noted in the result diagnostics.
-3. **Exhausted list → spawn error** with per-candidate diagnostics (what was tried, why each failed). **No** silent
-   fallback to the orchestrator's model.
-4. **Per-spawn `model` override replaces the list entirely** — the override is definitive; no fallback net applies.
+   - **Transient errors first (§R4.2a):** dropped streams/connections, timeouts, and provider overload are retried
+     on the **same** entry (bounded — 2 retries, short backoff) *before* moving down the chain. This matters for
+     single-entry chains (no `model` list → the parent's model), which have no next entry; and it avoids silently
+     switching models on a blip. Spent usage folds into the child total (§R11.6); retries are noted in diagnostics.
+     Non-transient failures (auth, bad request, context limits) skip straight to the next entry.
+3. **The orchestrator's model is the final fallback, always:** the parent's current model is appended to the end of
+   the resolved chain, deduped by ref id (a definition listing the parent's own model does not run it twice). Only a
+   list whose entries were all skipped *and* whose parent model is unavailable is a spawn error, with per-candidate
+   diagnostics (what was tried, why each failed).
+4. **Per-spawn `model` override replaces the list entirely** — the override is definitive; no fallback net applies
+   (no parent append either).
+5. **Per-entry thinking pins:** an entry's `@level` wins over the definition's `thinkingLevel`; a per-spawn
+   `thinkingLevel` param wins over both and rides the whole chain. Precedence: per-spawn > entry pin > definition.
 
 ### R5 — Tool scope & security (from #16)
 
@@ -186,6 +217,9 @@ One registered tool, **blocking**, params:
    parameter — it **always spawns the bundled `scout`**; params: `task` + optional `model`/`thinkingLevel`.
    Parallel scouts from a worker are allowed under the same global cap. User-defined agents are never spawnable by
    workers; depth stays 1.
+7. **Researcher-side firecrawl tools:** the `researcher`'s children receive the `firecrawl_*` tool set via the same
+   `customTools` injection (§R3). These are leaf capability tools (not a subagent spawner), so they do not affect
+   spawn depth; a researcher never receives any subagent tool.
 
 ### R11 — TUI observability (map #30)
 
@@ -255,7 +289,8 @@ Phased so each step is testable in isolation; platform references are to the pi 
 2. **Spawn core** — `createAgentSession()` child assembly: systemPromptOverride, cwd inheritance, in-memory session,
    tools allowlist + unknown-name fail-fast, extensions off, skill inheritance.
 3. **Model fallback pipeline** — `getAvailable()` pre-check → first usable model; runtime-failure retry down the
-   list; exhausted → spawn error with per-candidate diagnostics; override-replaces-list.
+   list; parent model always appended as final fallback (deduped); `ref@level` per-entry thinking pins;
+   override-replaces-list.
 4. **Orchestrator tool** — blocking execute, `onUpdate` progress relay from child events, statuses, 10KB cap +
    overflow files, `details` payload, Esc handling, concurrency cap 4 + queue.
 5. **Output contract** — JSON footer parse with graceful degradation, provenance append, truncation.
