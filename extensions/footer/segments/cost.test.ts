@@ -16,13 +16,22 @@ test("breakdown lists the orchestrator first; child costs are informational shar
 
   // usageStats already includes the children (they ride the tool result's message.usage),
   // so the total stays 12.20 — adding the breakdown again would double count.
-  assert.equal(rendered.content, "$12.20 (O:$12.20, W:$0.10, S:$0.35)");
+  assert.equal(rendered.content, "$12.20 (O:$12.20, S:$0.35, W:$0.10)");
   assert.equal(rendered.visible, true);
 });
 
-test("user-defined agents fall back to their initial as the breakdown label", () => {
-  const rendered = costSegment.render(ctx({ subagentCosts: { researcher: 0.25 } }));
-  assert.equal(rendered.content, "$12.20 (O:$12.20, R:$0.25)");
+test("bundled agents always render in the fixed order S, R, W regardless of first-seen order", () => {
+  const rendered = costSegment.render(
+    ctx({ subagentCosts: { worker: 0.1, scout: 0.35, researcher: 0.25 } }),
+  );
+  assert.equal(rendered.content, "$12.20 (O:$12.20, S:$0.35, R:$0.25, W:$0.10)");
+});
+
+test("user-defined agents fall back to their initial as the breakdown label and follow bundled agents", () => {
+  const rendered = costSegment.render(
+    ctx({ subagentCosts: { researcher: 0.25, tester: 0.05, worker: 0.1 } }),
+  );
+  assert.equal(rendered.content, "$12.20 (O:$12.20, R:$0.25, W:$0.10, T:$0.05)");
 });
 
 test("no breakdown is shown when no child cost was attributed", () => {

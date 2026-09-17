@@ -9,6 +9,10 @@ This log records notable functionality added to this configuration repository. S
 - Subagent model fallback gained two capabilities (spec `SUBAGENTS_EXTENSION.md` §R4): **per-entry thinking-level pins** — a `model` entry may end in an `@level` suffix (e.g. `github-copilot/gpt-5.6-luna@max`) to pin the thinking level for that chain entry alone; the split happens on the last `@` so model ids may legally contain one, and an unknown level fails the spawn with a clear diagnostic. And an **always-on parent fallback** — the orchestrator's current model is appended as the final entry of every resolved definition chain (deduped by ref id, so a definition listing the parent's own model does not run it twice), meaning an exhausted or unavailable list (e.g. the local server down) lands on the orchestrator's model instead of failing the spawn. Requested-level precedence: per-spawn `thinkingLevel` param > entry pin > definition default; a per-spawn `model` override stays definitive with no fallback net.
 - The bundled subagents now ship explicit model chains: `scout` and `researcher` run `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (local llama-server, zero cost) → `github-copilot/gpt-5.6-luna@max` → the orchestrator's model; `worker` runs the same local primary → `github-copilot/gpt-5.6-terra@medium`, with `thinkingLevel: medium` as the default so its parent fallback entry also stays medium (worker is deliberately medium-only, never higher).
 
+### Changed
+
+- The footer's per-subagent cost breakdown now renders in a fixed, stable order: the orchestrator's share (`O:`) first, then the bundled agents in the order `S:` (scout), `R:` (researcher), `W:` (worker), then user-defined agents by initial letter in the order they first appeared in the session. Previously the order followed whichever subagent results first appeared in the session, so the same agents could appear in different positions over time.
+
 ## 2026-09-14
 
 ### Added

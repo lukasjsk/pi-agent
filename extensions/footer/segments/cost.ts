@@ -13,6 +13,18 @@ function formatCost(ctx: SegmentContext, cost: number): string {
   return applyColor(ctx.theme, costColor(cost), `$${cost.toFixed(2)}`);
 }
 
+// Fixed display order for bundled agents (after the orchestrator); user-defined
+// agents follow in first-seen order.
+const BUNDLED_ORDER = ["scout", "researcher", "worker"];
+
+function orderedAgents(costs: Record<string, number | undefined>): string[] {
+  const names = Object.keys(costs);
+  return [
+    ...BUNDLED_ORDER.filter((name) => names.includes(name)),
+    ...names.filter((name) => !BUNDLED_ORDER.includes(name)),
+  ];
+}
+
 export const costSegment = {
   id: "cost" as const,
   render(ctx: SegmentContext): RenderedSegment {
@@ -24,7 +36,8 @@ export const costSegment = {
 
     const breakdown = [
       `O:${formatCost(ctx, ctx.usageStats.cost)}`,
-      ...Object.entries(ctx.subagentCosts)
+      ...orderedAgents(ctx.subagentCosts)
+        .map((agent) => [agent, ctx.subagentCosts[agent]] as const)
         .filter(([, cost]) => cost !== undefined)
         .map(([agent, cost]) => `${agentCostLabel(agent)}:${formatCost(ctx, cost ?? 0)}`),
     ];

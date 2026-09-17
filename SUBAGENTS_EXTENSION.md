@@ -261,8 +261,9 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
      settle (the report supersedes them).
 6. **Cost accounting (#34, #38):** a child's `getSessionStats()`, read once before dispose and returned once on
    the tool result, is the **single accounting source**; the live relay cost is display-only and never feeds
-   accounting. The footer folds tool-result usage into its totals; the per-agent breakdown (`W:`/`S:`, initial
-   letter for user-defined agents) is an informational share of that total, never added on top. A cancelled
+   accounting. The footer folds tool-result usage into its totals; the per-agent breakdown (orchestrator `O:`
+   first, then bundled agents in the fixed order `S:`/`R:`/`W:`, then user-defined agents by initial letter in
+   first-seen order) is an informational share of that total, never added on top. A cancelled
    child's partial usage counts as real spend — the footer's `stopReason: aborted/error` skip stays scoped to
    assistant messages; tool results are settled child-session totals and are always summed. A failed fallback
    attempt's usage folds into the returned total, noted in diagnostics. **Compaction divergence (intentional):**
