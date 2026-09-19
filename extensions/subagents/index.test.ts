@@ -13,6 +13,7 @@ installPiTuiMock();
 const { createSubagentExecutor, renderResultText } = await import("./index.ts");
 const { parseAgentDefinition, UnknownAgentError } = await import("./definitions.ts");
 const { SpawnScheduler } = await import("./concurrency.ts");
+const { createGitTools, GIT_TOOL_NAMES } = await import("./git-history.ts");
 
 const scout = parseAgentDefinition(
 	"/x/scout.md",
@@ -444,6 +445,7 @@ const depsWithChildTools = {
 		throw new UnknownAgentError(`Unknown agent "${name}". Valid agents: scout, worker`);
 	},
 	childTools: () => [createScoutTool(depsWithChildTools)],
+	scoutTools: () => createGitTools(),
 } as typeof deps;
 
 test("worker sessions receive the restricted scout tool via customTools (§R10.6)", async () => {
@@ -497,8 +499,9 @@ test("the worker-side tool has no agent parameter and always spawns the scout (�
 	assert.equal(result.details.status, "completed");
 	assert.equal(scoutSessions.length, 1, "the tool spawned exactly the scout");
 	const scoutSession = scoutSessions[0];
-	assert.equal(scoutSession.customTools, undefined, "scouts never receive a subagent tool");
-	assert.deepEqual(scoutSession.tools, ["read", "grep"], "scout gets only its own allowlist");
+	const injected = (scoutSession.customTools as Array<{ name: string }> | undefined) ?? [];
+	assert.deepEqual(injected.map((t) => t.name), [...GIT_TOOL_NAMES], "scouts get the git-history tools and never a subagent tool");
+	assert.deepEqual(scoutSession.tools, ["read", "grep", ...GIT_TOOL_NAMES], "injected tool names are appended to the allowlist");
 });
 
 test("a scout never receives a subagent tool and user-defined agents get none (depth stays 1, §R10.6)", async () => {
@@ -517,7 +520,8 @@ test("a scout never receives a subagent tool and user-defined agents get none (d
 	await execute({ agent: "custom", task: "Do a thing." }, undefined, undefined);
 
 	assert.equal(captured.length, 2);
-	assert.equal(captured[0].customTools, undefined, "scout sessions get no injected tools");
+	const scoutInjected = (captured[0].customTools as Array<{ name: string }> | undefined) ?? [];
+	assert.deepEqual(scoutInjected.map((t) => t.name), [...GIT_TOOL_NAMES], "scout gets leaf git tools, never a subagent tool");
 	assert.equal(captured[1].customTools, undefined, "user-defined agents get no injected tools");
 });
 

@@ -18,7 +18,6 @@ non-interactive child agent sessions (**subagents**) via a general subagent-spaw
 
 - New `/analyze-and-plan` and `/implement-and-review` prompts — a separate effort built on this extension. That layer
   also owns "persist the plan for later" (ask the user; orchestrator writes files itself — no extension mechanism).
-- Scout git-history exploration (token-efficient) — separate concern, potentially its own map.
 - Orchestrator workflow policies — how the orchestrator decides what to delegate, review loops, question-presentation
   policy. Live in the prompt/workflow layer.
 - Extensions inside children. Children never load extensions (hard rule, see §5).
@@ -71,6 +70,8 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 
 **`scout`** — exploration; returns compressed context.
 - `tools: [read, grep, find, ls]` — truly read-only, **no bash**.
+- Git history arrives by injection, not from bash (§R12): `git_history` and `git_show` are leaf capability tools
+  appended to the child's tool list at session creation, so the `tools` line above stays the allowlist.
 - `skills: on`; `thinkingLevel: low` (default for the parent fallback entry). Model chain (user-tuned):
   local `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (llama-server, free) →
   `github-copilot/gpt-5.6-luna@xhigh` → the orchestrator's model.
@@ -220,6 +221,8 @@ One registered tool, **blocking**, params:
 7. **Researcher-side firecrawl tools:** the `researcher`'s children receive the `firecrawl_*` tool set via the same
    `customTools` injection (§R3). These are leaf capability tools (not a subagent spawner), so they do not affect
    spawn depth; a researcher never receives any subagent tool.
+8. **Scout-side git-history tools (§R12):** the `scout`'s children receive `git_history`/`git_show` via the same
+   `customTools` injection. Also leaf capability tools — no effect on spawn depth.
 
 ### R11 — TUI observability (map #30)
 
@@ -278,6 +281,39 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
    implemented and test-covered. The live relay cost stays display-only; the settled `usage` on the tool
    result is the single accounting source.
 
+### R12 — Scout git-history surface (source task: [PLANNED_FEATURES.md](PLANNED_FEATURES.md))
+
+Scout has no `bash` (§R3), so it cannot run git at all — and handing it bash would break both its read-only
+contract and the token-efficiency goal that made it read-only. Instead it gets two purpose-built leaf tools over the
+same `customTools` injection path as the researcher's firecrawl set (§R10.7). Token cost is the design constraint:
+this replaces `git log -p` in the child's context, it is not a git wrapper.
+
+1. **Surface.** `git_history` lists a commit history as one compact line per commit
+   (`short-hash date author: subject`). `git_show` inspects a single commit — `--stat` summary by default, the patch
+   only when `includePatch` is set. Both are read-only and neither appears in the frontmatter allowlist; they are
+   appended to the child's tool list at session creation, so §R5.2's unknown-name validation is untouched.
+2. **Cheap by default.** `git_history` uses `--max-count=30` (hard cap 100) and `--no-merges`, emits no porcelain
+   decoration, caps each subject at 200 chars, and adds `--follow` whenever a `path` is given — that is what "the
+   history of this file" means across renames. `stats` optionally adds a compressed per-commit `(N files, +I/-D)`
+   shortstat (slower: git computes diffs). `git_show` never returns a patch unless asked, and a `path` filter
+   disables its rename detection — omit `path` to see a rename as a rename rather than an unrelated add/delete.
+3. **Bounded output.** Both tools truncate stdout at a 32 KB display cap, on a line boundary, with a marker naming
+   the narrowing knobs (`maxCount`/`since`/`path`, or dropping `includePatch`). The process `maxBuffer` (16 MB) is
+   deliberately separate: it decides when a runaway command is killed, the display cap decides what reaches the
+   model.
+4. **No command surface.** `execFile("git", argv)` with no shell and a fixed subcommand per tool. Every
+   caller-supplied positional (ref, path, commit) rejects a leading `-` (option injection) and control characters,
+   pathspecs always follow `--`, and `--no-pager` is always passed.
+5. **Plain failure text.** A non-repo workspace, a repo with no commits yet, and an empty match set each return one
+   actionable sentence instead of a git error dump.
+6. **Scope.** Scout only. The worker and the orchestrator have `bash` and run git themselves; user-defined agents
+   never receive these tools.
+7. **Prompt.** Scout's prompt carries the escalation (`git_history` to find the commits that matter, `git_show` to
+   drill into one) and the read-only contract.
+8. **Implementation status:** shipped — `git-history.ts` (pure argv builders, log parser/formatter, injectable
+   runner over the shared `cli.ts` seam) wired through `SubagentDeps.scoutTools`, with unit coverage that stubs
+   the runner and needs neither a repository nor a real git binary.
+
 ## 4. Implementation plan
 
 Phased so each step is testable in isolation; platform references are to the pi docs under
@@ -299,9 +335,10 @@ Phased so each step is testable in isolation; platform references are to the pi 
 7. **TUI observability** — implemented per §R11: bordered self-shell framing, two-line live header, 3-row
    collapsed tail, live payload thinking/tokens, settled `calls` list with omission marker, and failed-retry
    usage folding.
-8. **Acceptance pass** — walk every requirement in §3 against the implementation; exercise parallel spawns, a
+8. **Scout git-history tools (§R12)** — `git_history`/`git_show` over the shared `cli.ts` seam, injected via
+   `SubagentDeps.scoutTools`; pure argv builders, log parsing/formatting, and an injectable runner.
+9. **Acceptance pass** — walk every requirement in §3 against the implementation; exercise parallel spawns, a
    runtime-failure fallback, an unparseable footer, an oversized report, Esc-cancel mid-run.
-
 ## 5. Open items (non-blocking)
 
 - List-valued `skills` per role: deliberately deferred; additive later without breaking definitions (#19).

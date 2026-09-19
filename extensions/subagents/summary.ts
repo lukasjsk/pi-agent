@@ -38,6 +38,13 @@ export function toolCallSummary(toolName: string, args: unknown, max = 48): stri
 		case "ls":
 			target = str(a.path) ?? str(a.pattern);
 			break;
+		case "git_history":
+			// Prefer the followed file over the revision: that is what the call is about.
+			target = str(a.path) ?? str(a.ref);
+			break;
+		case "git_show":
+			target = str(a.commit) ?? str(a.path);
+			break;
 		default: {
 			// Unknown/custom tool: first non-empty string argument as the primary target.
 			const first = Object.values(a).find((v) => typeof v === "string" && v.trim()) as string | undefined;

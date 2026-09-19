@@ -9,7 +9,7 @@
 //
 // Platform-light: the argv mapping (buildFirecrawlArgs) is a pure function and the process
 // runner is injectable, so both are unit-testable without spawning a real CLI. The only
-// non-injectable seam is defaultFirecrawlRunner (node:child_process.execFile).
+// non-injectable seam is defaultFirecrawlRunner, which delegates to the shared cli.ts runner.
 //
 // Design note: each tool fixes the subcommand and its primary positional argument(s) as
 // typed parameters; advanced flags are carried in an `options` string array. `options`
@@ -17,10 +17,10 @@
 // arbitrary-command escape hatch — the researcher can only ever run `firecrawl <fixed-sub> …`.
 // The firecrawl skills (loaded in the child via `skills: on`) document the exact flags.
 
-import { execFile } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createExecFileRunner, type CliRunner } from "./cli.ts";
 
 export const FIREFCRAWL_BIN = "firecrawl";
 /** Output cap for a single firecrawl call; larger stdout is truncated with a marker. */
@@ -36,37 +36,8 @@ export const FIREFCRAWL_TOOL_NAMES = [
 ] as const;
 export type FirecrawlToolName = (typeof FIREFCRAWL_TOOL_NAMES)[number];
 
-/** Injectable process runner so tests can stub the CLI. */
-export interface FirecrawlRunner {
-	run(
-		bin: string,
-		args: readonly string[],
-		signal: AbortSignal | undefined,
-	): Promise<{ stdout: string; stderr: string; code: number }>;
-}
-
 /** Default runner: execFile with no shell; large maxBuffer for page content. */
-export const defaultFirecrawlRunner: FirecrawlRunner = {
-	async run(bin, args, signal) {
-		return await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-			execFile(bin, [...args], { signal, maxBuffer: OUTPUT_CAP_BYTES }, (error, stdout, stderr) => {
-				if (error) {
-					const message = error.message || String(error);
-					// On abort execFile reports a non-ExitError; report it as a failed run —
-					// the caller also checks signal.aborted to phrase the result.
-					const code = (error as NodeJS.ErrnoException & { code?: number }).code;
-					resolve({
-						stdout: String(stdout ?? ""),
-						stderr: String(stderr ?? "") + (message ? `\n${message}` : ""),
-						code: typeof code === "number" ? code : 1,
-					});
-					return;
-				}
-				resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code: 0 });
-			});
-		});
-	},
-};
+export const defaultFirecrawlRunner: CliRunner = createExecFileRunner(OUTPUT_CAP_BYTES);
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
@@ -199,7 +170,7 @@ function resultText(content: string, details: FirecrawlDetails) {
 }
 
 /** Build a researcher-side firecrawl tool set. The runner is injectable for tests. */
-export function createFirecrawlTools(runner: FirecrawlRunner = defaultFirecrawlRunner): ToolDefinition[] {
+export function createFirecrawlTools(runner: CliRunner = defaultFirecrawlRunner): ToolDefinition[] {
 	return SPECS.map((spec) =>
 		defineTool({
 			name: spec.name,

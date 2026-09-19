@@ -70,7 +70,7 @@ export function installPiCodingAgentMock(): void {
 }
 
 // typebox is only resolvable under Pi's module aliases, not from this repo. One shared
-// superset stub (Object/String/Optional plus the Array/Union/Literal/Literal the
+// superset stub (Object/String/Optional plus the Array/Union/Literal/Number/Boolean the
 // subagents schemas use) so no suite's typebox mock can poison another's process-global
 // bun mock, regardless of load order. The shapes are inert — suites assert on behavior,
 // not on the schema objects these return.
@@ -79,6 +79,8 @@ export function installTypeboxMock(): void {
 		Type: {
 			Object: (properties: unknown) => ({ type: "object", properties }),
 			String: (options: unknown = {}) => ({ type: "string", ...(options as object) }),
+			Number: (options: unknown = {}) => ({ type: "number", ...(options as object) }),
+			Boolean: (options: unknown = {}) => ({ type: "boolean", ...(options as object) }),
 			Optional: (schema: unknown) => schema,
 			Array: (schema: unknown = {}) => ({ type: "array", items: schema }),
 			Union: (schemas: unknown, options: unknown = {}) => ({ type: "union", anyOf: schemas, ...(options as object) }),

@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
 import { createFirecrawlTools } from "./firecrawl.ts";
+import { createGitTools } from "./git-history.ts";
 import { runSubagent, type ChildUsage, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
 import { renderStructuredFields, type StructuredFooter } from "./report.ts";
 import { resolveModelChain, type ModelRegistryLike } from "./models.ts";
@@ -91,12 +92,17 @@ export interface SubagentDeps {
 	/** Custom tools injected into researcher child sessions: the firecrawl web-research tools
 	 *  (replacing raw bash). Absent in tests unless wired explicitly. */
 	researcherTools?: () => ToolDefinition[];
+	/** Custom tools injected into scout child sessions: the git-history tools (§R12). Absent in
+	 *  tests unless wired explicitly. */
+	scoutTools?: () => ToolDefinition[];
 }
 
 /** The worker role name — the only definition whose children receive the restricted scout tool. */
 export const WORKER_AGENT_NAME = "worker";
 /** The researcher role name — the only definition whose children receive the firecrawl web-research tools. */
 export const RESEARCHER_AGENT_NAME = "researcher";
+/** The scout role name — the only definition whose children receive the git-history tools (§R12). */
+export const SCOUT_AGENT_NAME = "scout";
 /** Name of the restricted subagent tool injected into worker sessions (spec §R10.6). */
 export const SCOUT_TOOL_NAME = "scout";
 
@@ -104,7 +110,7 @@ export const SCOUT_TOOL_NAME = "scout";
  *  the scout. Parallel calls from the worker contend on the same global scheduler, and the
  *  spawned scout never receives a subagent tool itself (spawn depth stays 1). */
 export function createScoutTool(deps: SubagentDeps): ToolDefinition {
-	const executor = createSubagentExecutor(deps, "scout");
+	const executor = createSubagentExecutor(deps, SCOUT_AGENT_NAME);
 	return defineTool({
 		name: SCOUT_TOOL_NAME,
 		label: "Scout",
@@ -211,11 +217,13 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 		}
 
 		// Depth-1 nesting (§R10.6): only the worker's children receive the restricted scout
-		// tool; scouts and user-defined agents never do, and no child gets the general tool.
-		// The researcher's children receive the firecrawl web-research tools instead (no bash).
+		// tool; scouts and user-defined agents never receive a subagent tool, and no child gets
+		// the general tool. Other roles get leaf capability tools instead of bash: the
+		// researcher the firecrawl web-research set, the scout the git-history set (§R12).
 		let childTools: ToolDefinition[] | undefined;
 		if (definition.name === WORKER_AGENT_NAME) childTools = deps.childTools?.();
 		else if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
+		else if (definition.name === SCOUT_AGENT_NAME) childTools = deps.scoutTools?.();
 
 		const result = await deps.scheduler.run(
 			() =>
@@ -337,6 +345,9 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 	deps.childTools = () => [createScoutTool(deps)];
 	// Firecrawl web-research tools for researcher children (design A: injected, no bash).
 	deps.researcherTools = () => createFirecrawlTools();
+	// Git-history tools for scout children (§R12): scout has no bash, and this is what keeps
+	// "explore the history" from meaning "dump a raw log into the context budget".
+	deps.scoutTools = () => createGitTools();
 	return deps;
 }
 

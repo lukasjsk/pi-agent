@@ -17,7 +17,7 @@ The general-purpose subagent that performs implementation work and applies skill
 _Avoid_: implementer, doer
 
 **Scout**:
-The exploration subagent that reconnoiters the workspace and returns a compressed report. A leaf: it cannot spawn further subagents.
+The exploration subagent that reconnoiters the workspace and returns a compressed report. Read-only (no bash); its git-history capability is a pair of injected tools (`git_history`, `git_show` — not frontmatter tools). A leaf: it cannot spawn further subagents.
 _Avoid_: explorer
 
 **Researcher**:

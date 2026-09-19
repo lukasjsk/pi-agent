@@ -40,3 +40,10 @@ test("unknown tools fall back to the first non-empty string argument", () => {
 	assert.equal(toolCallSummary("mytool", { count: 3 }), "");
 	assert.equal(toolCallSummary("read", undefined), "");
 });
+
+test("git tools: the followed file, or the commit being inspected", () => {
+	assert.equal(toolCallSummary("git_history", { path: "src/parser.ts", stats: true }), "src/parser.ts");
+	assert.equal(toolCallSummary("git_history", { ref: "v1..HEAD" }), "v1..HEAD");
+	assert.equal(toolCallSummary("git_history", { includeMerges: true }), "");
+	assert.equal(toolCallSummary("git_show", { commit: "a1b2c3d", includePatch: true }), "a1b2c3d");
+});
