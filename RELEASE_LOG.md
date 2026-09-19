@@ -2,6 +2,20 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-19
+
+### Added
+
+- `scout` can now read git history, token-efficiently, without gaining `bash`. Two purpose-built leaf tools (spec `SUBAGENTS_EXTENSION.md` §R12) are injected into scout child sessions through the same `customTools` path as the researcher's firecrawl set, so the frontmatter allowlist stays `[read, grep, find, ls]`: `git_history` returns one compact line per commit (`short-hash date author: subject`), follows a file through renames (`--follow`) when a `path` is given, defaults to 30 commits (`--max-count`, hard cap 100) with merges excluded, accepts `since`/`until`, and optionally adds a compressed per-commit `(N files, +I/-D)` shortstat; `git_show` inspects a single commit as a `--stat` summary, returning the patch only when `includePatch` is set. Both cap stdout at 32 KB, truncated on a line boundary with a marker naming the narrowing knobs — the 16 MB process `maxBuffer` is deliberately separate, deciding when a runaway command is killed rather than what reaches the model — run `git` via `execFile` with no shell and a fixed subcommand per tool, reject leading `-` and control characters in caller-supplied positionals, and turn a non-repo workspace, a repo with no commits yet, or an empty match set into one plain sentence. A `path` filter defeats git's own rename detection, so the `git_show` description and the scout prompt both say to omit `path` when tracing a rename. New files: `extensions/subagents/git-history.ts` (pure argv builders and log parser/formatter, injectable runner) and `git-history.test.ts`; the git calls also get deterministic tool-call-summary targets (`path`/`ref` for `git_history`, `commit` for `git_show`).
+
+### Changed
+
+- The `execFile` runner used by the injected CLI-backed tools moved into `extensions/subagents/cli.ts`; `firecrawl.ts` now delegates to it, so the researcher's web tools and the scout's git tools share one abort/error-handling seam (no behavior change).
+
+### Fixed
+
+- The date-adjusted Copilot quota-tier test no longer depends on the calendar day the suite runs: it pins the clock (`setSystemTime`) instead of asserting that a fixed ratio lands in the hex tier, which cannot hold on every day of a month.
+
 ## 2026-09-17
 
 ### Added
