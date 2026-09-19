@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setSystemTime } from "bun:test";
 
 import type { SegmentContext } from "../types.ts";
 import { DEFAULT_ROW1_LEFT, DEFAULT_ROW2_LEFT } from "../config.ts";
@@ -27,13 +28,20 @@ test("combines GitHub Copilot usage into the model segment", () => {
 });
 
 test("colors the usage suffix by the date-adjusted quota tier", () => {
-  // 5051/10000 mid-month lands in the hex tier; applyColor emits raw ANSI for hex
-  // colors, so the visible text is the assertion, not the full styled string.
-  const rendered = modelSegment.render(ctx({
-    providerUsage: { provider: "github-copilot", used: 5051, total: 10_000 },
-  }));
-  assert.match(rendered.content, /github-copilot:5051\/10000/);
-  assert.match(rendered.content, /\x1b\[/, "hex tier applies ANSI regardless of theme");
+  // 5051/10000 is in the hex tier halfway through the month, so pin the clock: the tier
+  // is computed against the current date and would otherwise drift with the calendar day
+  // the suite happens to run on. applyColor emits raw ANSI for hex colors, so the ANSI
+  // escape in the content is the assertion, not the visible text.
+  setSystemTime(new Date(2025, 3, 15));
+  try {
+    const rendered = modelSegment.render(ctx({
+      providerUsage: { provider: "github-copilot", used: 5051, total: 10_000 },
+    }));
+    assert.match(rendered.content, /github-copilot:5051\/10000/);
+    assert.match(rendered.content, /\x1b\[/, "hex tier applies ANSI regardless of theme");
+  } finally {
+    setSystemTime();
+  }
 });
 
 test("retains a pending GitHub Copilot usage suffix while usage loads", () => {
