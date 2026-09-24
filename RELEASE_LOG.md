@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-24
+
+### Added
+
+- The README's install instructions gained an **Orchestrator-only mode** section: setting `defaultTools: ["subagent", "ask_user_question"]` in Pi's settings (`~/.pi/agent/settings.json` or project-local `.pi/settings.json`) strips the main agent down to exactly those two tools, so all work is delegated to subagents. Documented why it works (extension tool names are valid `defaultTools` entries, and configuring the setting suppresses the auto-enable of other extension tools), plus the recommended pairing with an orchestrator instruction in `AGENTS.md` and per-invocation overrides (`pi -t read,bash,edit,write`).
+
 ## 2026-09-19
 
 ### Added

@@ -45,6 +45,18 @@ done
 
 Restart Pi after installing or changing extensions. Select the theme with Pi's theme picker.
 
+### Orchestrator-only mode (optional)
+
+To make the main agent an orchestrator — no built-in tools, all work delegated to subagents — restrict the default tool selection in Pi's settings (`~/.pi/agent/settings.json`, or project-local `.pi/settings.json`). Extension tool names are accepted in `defaultTools`; configuring it also disables the auto-enable of other extension tools, so the listed names become the exact tool set:
+
+```json
+{
+  "defaultTools": ["subagent", "ask_user_question"]
+}
+```
+
+The main agent then starts with only `subagent` and `ask_user_question`, while `read`, `bash`, `edit`, and `write` are off. Pair this with an orchestrator instruction in your `AGENTS.md` (for example: "Never perform work directly; delegate every task to a subagent and synthesize their reports."), since the tool restriction enforces capability but not intent. Override per invocation with `pi -t read,bash,edit,write` (or `-xt` / `-nt`) when you need direct tools in a specific session.
+
 ## Deprecated workflow
 
 The previous bounded development workflow — the `/analyze-and-plan` and `/implement-and-review`
