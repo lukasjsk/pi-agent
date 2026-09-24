@@ -8,6 +8,10 @@ This log records notable functionality added to this configuration repository. S
 
 - The README's install instructions gained an **Orchestrator-only mode** section: setting `defaultTools: ["subagent", "ask_user_question"]` in Pi's settings (`~/.pi/agent/settings.json` or project-local `.pi/settings.json`) strips the main agent down to exactly those two tools, so all work is delegated to subagents. Documented why it works (extension tool names are valid `defaultTools` entries, and configuring the setting suppresses the auto-enable of other extension tools), plus the recommended pairing with an orchestrator instruction in `AGENTS.md` and per-invocation overrides (`pi -t read,bash,edit,write`).
 
+### Changed
+
+- Migrated `ask_user_question` from the compatibility package names `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, and `@sinclair/typebox` to the canonical `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and TypeBox 1.x `typebox` imports used by current Pi releases. Added focused extension tests and a repository test that rejects legacy imports in active extension sources.
+
 ## 2026-09-19
 
 ### Added

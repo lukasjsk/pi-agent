@@ -94,6 +94,39 @@ export function installTypeboxMock(): void {
 export const piTuiMock = {
 	visibleWidth: (text: string) => text.length,
 	truncateToWidth: (text: string, _maxWidth?: number) => text,
+	wrapTextWithAnsi: (text: string, _maxWidth: number) => text.split("\n"),
+	matchesKey: (data: string, key: string) => data === key,
+	Key: {
+		up: "up",
+		down: "down",
+		enter: "enter",
+		space: "space",
+		escape: "escape",
+	},
+	Editor: class {
+		private text = "";
+		onSubmit?: (value: string) => void;
+
+		constructor(_tui: unknown, _theme: unknown) {}
+
+		setText(text: string) {
+			this.text = text;
+		}
+
+		handleInput(data: string) {
+			if (data === "\r" || data === "\n") {
+				this.onSubmit?.(this.text);
+			} else if (data === "\x7f") {
+				this.text = this.text.slice(0, -1);
+			} else {
+				this.text += data;
+			}
+		}
+
+		render(): string[] {
+			return this.text ? [this.text] : [];
+		}
+	},
 	Text: class {
 		text: string;
 		constructor(text = "") {
