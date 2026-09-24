@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { installPiCodingAgentMock, installPiTuiMock, installTypeboxMock } from "./test/pi-mock.ts";
+import { installPiCodingAgentMock, installPiTuiMock, installTypeboxMock } from "../test/pi-mock.ts";
 
 installPiCodingAgentMock();
 installPiTuiMock();
 installTypeboxMock();
 
-const { default: askUserQuestion } = await import("./ask-user-question.ts");
+const { default: askUserQuestion } = await import("./index.ts");
 
 interface AskParams {
 	question: string;
