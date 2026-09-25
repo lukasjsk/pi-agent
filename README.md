@@ -12,6 +12,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
 | [`deprecated/`](deprecated) | Deprecated resources (agents, subagent extension, compact-and-new-session extension, and the analyze-and-plan / implement-and-review prompts), preserved for reference. See [`deprecated/DEPRECATED.md`](deprecated/DEPRECATED.md). |
+| [`skills-lock.json`](skills-lock.json) | Lockfile for project-level agent skills ([`mattpocock/skills`](https://github.com/mattpocock/skills)) managed by the [`skills`](https://github.com/vercel-labs/skills) CLI (skills.sh). Restore the pinned skills with `npx skills experimental_install`. |
 
 ## Install
 
@@ -44,6 +45,13 @@ done
 > The command replaces only same-named resources from this repository (for example, `extensions/footer`), not the whole Pi resource directory. Back up local changes to those same-named resources first.
 
 Restart Pi after installing or changing extensions. Select the theme with Pi's theme picker.
+
+To restore the pinned project skills (listed in `skills-lock.json`), run in the repository root:
+
+```bash
+npx skills experimental_install
+```
+
 
 ### Orchestrator-only mode (optional)
 

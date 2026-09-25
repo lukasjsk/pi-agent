@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-25
+
+### Added
+
+- Project agent skills are now reproducible across machines. The [skills CLI](https://github.com/vercel-labs/skills) (skills.sh) lockfile `skills-lock.json` is committed, pinning the six `mattpocock/skills` project skills installed in `.pi/skills/` (domain-modeling, grilling, prototype, research, setup-matt-pocock-skills, wayfinder) with per-skill source, path, and content hash. On a fresh clone, `npx skills experimental_install` in the repository root restores the exact pinned skills, and `npx skills update -p` refreshes them within the locked sources (re-committing the lockfile propagates versions to everyone else). The README documents the restore step, and the generated `.pi/` directory is gitignored since the lockfile is the source of truth.
+
 ## 2026-09-24
 
 ### Added
