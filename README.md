@@ -11,6 +11,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | [`extensions/ask-user-question/index.ts`](extensions/ask-user-question/index.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
 | [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
+| [`skills/unslop/SKILL.md`](skills/unslop/SKILL.md) | The `unslop` skill that cuts AI tells from writing: a numbered rule set covering content, language, style, communication artifacts, filler, jargon, and plain speech. User-invoked only (`disable-model-invocation: true`). |
 | [`deprecated/`](deprecated) | Deprecated resources (agents, subagent extension, compact-and-new-session extension, and the analyze-and-plan / implement-and-review prompts), preserved for reference. See [`deprecated/DEPRECATED.md`](deprecated/DEPRECATED.md). |
 | [`skills-lock.json`](skills-lock.json) | Lockfile for project-level agent skills ([`mattpocock/skills`](https://github.com/mattpocock/skills)) managed by the [`skills`](https://github.com/vercel-labs/skills) CLI (skills.sh). Restore the pinned skills with `npx skills experimental_install`. |
 
@@ -23,7 +24,7 @@ git clone <repository-url> ~/src/pi-agent-config
 cd ~/src/pi-agent-config
 
 repo_root=$PWD
-for category in agents extensions prompts themes; do
+for category in agents extensions prompts themes skills; do
   config_dir="$HOME/.pi/agent/$category"
 
   # Migrate an old directory symlink without touching a real config directory.

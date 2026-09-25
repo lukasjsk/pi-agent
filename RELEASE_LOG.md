@@ -7,6 +7,7 @@ This log records notable functionality added to this configuration repository. S
 ### Added
 
 - Project agent skills are now reproducible across machines. The [skills CLI](https://github.com/vercel-labs/skills) (skills.sh) lockfile `skills-lock.json` is committed, pinning the six `mattpocock/skills` project skills installed in `.pi/skills/` (domain-modeling, grilling, prototype, research, setup-matt-pocock-skills, wayfinder) with per-skill source, path, and content hash. On a fresh clone, `npx skills experimental_install` in the repository root restores the exact pinned skills, and `npx skills update -p` refreshes them within the locked sources (re-committing the lockfile propagates versions to everyone else). The README documents the restore step, and the generated `.pi/` directory is gitignored since the lockfile is the source of truth.
+- A repository-owned `unslop` skill ([`skills/unslop/SKILL.md`](skills/unslop/SKILL.md)) that cuts AI tells from writing. It is a user-invoked skill (`disable-model-invocation: true`) whose numbered rule set (stable ids, gaps kept for removed rules) covers content, language, style, communication artifacts, filler, jargon, and plain speech. The install script now also links the `skills/` category, so `skills/unslop` is symlinked into `~/.pi/agent/skills/` like the extensions.
 
 ## 2026-09-24
 
