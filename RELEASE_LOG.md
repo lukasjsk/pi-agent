@@ -2,6 +2,17 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-09-28
+
+### Changed
+
+- The top-level agent no longer recommends a hard tool restriction. The README's **Orchestrator-only mode** section — which told users to set `defaultTools: ["subagent", "ask_user_question"]` and strip the main agent's `read`/`bash`/`edit`/`write` — is replaced by an **Orchestrator preference** section that frames delegate-first behavior as a soft `AGENTS.md` instruction. The top-level agent keeps its write tools so it can handle simple tasks directly or follow an explicit user request without a per-invocation override; `defaultTools` is still noted as available for anyone who wants the hard restriction.
+- `worker` is now a leaf agent. It no longer receives a restricted `scout` tool, so it cannot spawn any subagent; it does its own reconnaissance with `read`/`grep`/`find`/`ls`. Its frontmatter keeps full `write` access (`[read, bash, edit, write, grep, find, ls]`) and the prompt now says so explicitly instead of pointing at the scout tool. `researcher` and `scout` still receive their injected leaf tools (firecrawl / git-history) through the same `customTools` path, which is now the only consumer of that path. A regression test asserts that a worker session gets no injected custom tools and no `subagent`/`scout` tool while retaining `write`.
+
+### Removed
+
+- The worker-side restricted scout tool: `createScoutTool` and the `WORKER_AGENT_NAME`/`SCOUT_TOOL_NAME` exports in `extensions/subagents/index.ts`, the `childTools` dependency that wired it, its §R10.6 test coverage in `index.test.ts`, and the worker prompt's scout-delegation instructions. `scout` remains spawnable directly from the orchestrator via the general `subagent` tool.
+
 ## 2026-09-25
 
 ### Added

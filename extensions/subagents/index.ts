@@ -3,12 +3,11 @@
 // unknown agent = spawn error, progress relayed via onUpdate.
 // Later tickets add: full schema validation (#21), model fallback (#23), structured
 // output contract (#22), transport/overflow (#24), concurrency + Esc semantics (#25 —
-// done: SpawnScheduler cap/queue, queued-Esc drain), worker-side restricted tool (#26),
-// TUI rendering (#27).
+// done: SpawnScheduler cap/queue, queued-Esc drain), TUI rendering (#27).
+// The former worker-side restricted scout tool (#26) was removed: children are leaves.
 
 import { Type } from "typebox";
 import {
-	defineTool,
 	getAgentDir,
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -86,9 +85,6 @@ export interface SubagentDeps {
 	getSessionId?: () => string | undefined;
 	/** Extension-wide spawn cap + queue (§R8.3–R8.4). Shared across all parallel tool calls. */
 	scheduler: SpawnScheduler;
-	/** Custom tools injected into worker child sessions (§R10.6): the restricted scout spawner.
-	 *  Absent in tests unless wired explicitly. */
-	childTools?: () => ToolDefinition[];
 	/** Custom tools injected into researcher child sessions: the firecrawl web-research tools
 	 *  (replacing raw bash). Absent in tests unless wired explicitly. */
 	researcherTools?: () => ToolDefinition[];
@@ -97,37 +93,10 @@ export interface SubagentDeps {
 	scoutTools?: () => ToolDefinition[];
 }
 
-/** The worker role name — the only definition whose children receive the restricted scout tool. */
-export const WORKER_AGENT_NAME = "worker";
 /** The researcher role name — the only definition whose children receive the firecrawl web-research tools. */
 export const RESEARCHER_AGENT_NAME = "researcher";
 /** The scout role name — the only definition whose children receive the git-history tools (§R12). */
 export const SCOUT_AGENT_NAME = "scout";
-/** Name of the restricted subagent tool injected into worker sessions (spec §R10.6). */
-export const SCOUT_TOOL_NAME = "scout";
-
-/** The worker-side restricted subagent tool (§R10.6): no agent parameter — it always spawns
- *  the scout. Parallel calls from the worker contend on the same global scheduler, and the
- *  spawned scout never receives a subagent tool itself (spawn depth stays 1). */
-export function createScoutTool(deps: SubagentDeps): ToolDefinition {
-	const executor = createSubagentExecutor(deps, SCOUT_AGENT_NAME);
-	return defineTool({
-		name: SCOUT_TOOL_NAME,
-		label: "Scout",
-		executionMode: "parallel",
-		renderShell: "self",
-		description:
-			"Delegate exploration to a scout subagent and wait for its report. The scout is read-only " +
-			"(read, grep, find, ls) and returns a map of the relevant code with exact file:line references. " +
-			"Write the task self-contained — the scout sees nothing else from this conversation. " +
-			"One call spawns one scout; parallel calls are allowed.",
-		parameters: Type.Object({ task: taskParam, model: modelParam, thinkingLevel: thinkingLevelParam }),
-		execute: (_toolCallId, params, signal, onUpdate) =>
-			executor(params as { agent?: string; task: string; model?: string; thinkingLevel?: string }, signal, onUpdate as never),
-		renderCall: renderSubagentCall,
-		renderResult: renderSubagentResult,
-	});
-}
 
 /** Compose the tool result text: markdown body, structured fields, then extension-appended provenance.
  *
@@ -174,12 +143,8 @@ ${result.diagnostics.map((d) => `- ${d}`).join("\n")}`
 	return [`${header}${body}`, tail].filter(Boolean).join("\n\n");
 }
 
-/** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O).
- *
- * With `fixedAgent` set (worker-side scout tool), the executor always spawns that agent and
- * `params.agent` is absent from the tool's schema.
- */
-export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) {
+/** Build the tool executor against injectable deps (keeps the unit under test free of discovery I/O). */
+export function createSubagentExecutor(deps: SubagentDeps) {
 	return async function execute(
 		params: { agent?: string; task: string; model?: string; thinkingLevel?: string },
 		signal: AbortSignal | undefined,
@@ -187,7 +152,7 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubagentToolDetails; usage?: ChildUsage }> {
 		let definition: AgentDefinition;
 		try {
-			definition = deps.resolveAgent(fixedAgent ?? params.agent!);
+			definition = deps.resolveAgent(params.agent!);
 		} catch (error) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
@@ -216,13 +181,11 @@ export function createSubagentExecutor(deps: SubagentDeps, fixedAgent?: string) 
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
 
-		// Depth-1 nesting (§R10.6): only the worker's children receive the restricted scout
-		// tool; scouts and user-defined agents never receive a subagent tool, and no child gets
-		// the general tool. Other roles get leaf capability tools instead of bash: the
-		// researcher the firecrawl web-research set, the scout the git-history set (§R12).
+		// Children are leaves: no child receives a subagent tool, and none get the general
+		// orchestrator tool. Roles that must forgo `bash` instead receive leaf capability tools:
+		// the researcher the firecrawl web-research set, the scout the git-history set (§R12).
 		let childTools: ToolDefinition[] | undefined;
-		if (definition.name === WORKER_AGENT_NAME) childTools = deps.childTools?.();
-		else if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
+		if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
 		else if (definition.name === SCOUT_AGENT_NAME) childTools = deps.scoutTools?.();
 
 		const result = await deps.scheduler.run(
@@ -311,8 +274,7 @@ const SUBAGENT_RENDERERS = { renderCall: renderSubagentCall, renderResult: rende
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		// Extension-wide cap (§R8.3): one scheduler per session, shared by every parallel
-		// subagent tool call — including scout spawns from workers, which capture this same
-		// deps object via deps.childTools. Config: ~/.pi/agent/configs/subagents.json.
+		// subagent tool call. Config: ~/.pi/agent/configs/subagents.json.
 		const deps = makeDeps(ctx);
 		deps.scheduler = new SpawnScheduler(loadMaxConcurrent());
 		const executor = createSubagentExecutor(deps);
@@ -340,9 +302,6 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 		getSessionId: () => ctx.sessionManager?.getSessionId(),
 		scheduler: undefined as never, // assigned by the factory right after makeDeps
 	};
-	// The restricted scout tool for worker children must see the SAME deps object (same
-	// scheduler, registry, overflow root) — it closes over `deps`, not a copy.
-	deps.childTools = () => [createScoutTool(deps)];
 	// Firecrawl web-research tools for researcher children (design A: injected, no bash).
 	deps.researcherTools = () => createFirecrawlTools();
 	// Git-history tools for scout children (§R12): scout has no bash, and this is what keeps

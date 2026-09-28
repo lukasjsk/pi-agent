@@ -29,10 +29,10 @@ The act of starting a subagent session via the subagent tool, singly or in paral
 _Avoid_: launch, invoke, fork
 
 **Restricted subagent tool**:
-The variant of the subagent tool injected into a worker session that can spawn only scouts, enforcing the spawn-depth limit without loading extensions.
+_Removed_ — see §R10.6 in the spec history. Children are leaves; no subagent tool is injected into any child.
 
 **Spawn depth**:
-How many subagent levels nest below the orchestrator. Capped at 1: orchestrator → worker → scout.
+How many subagent levels nest below the orchestrator. Currently 1: the orchestrator spawns agents, and every child is a leaf.
 
 **Agent definition**:
 A user-editable markdown file (YAML frontmatter + body) that defines a spawnable subagent role: config fields in frontmatter, the system prompt in the body. Bundled worker/scout/researcher defaults live in the extension; user-level files override by name.
@@ -59,7 +59,7 @@ A raw, unwrapped source line of a subagent's visible generated text (assistant t
 _Avoid_: output line, transcript tail, display line
 
 **Nested scout**:
-A scout spawned by a worker via the restricted subagent tool. Visible to the orchestrator only as the worker's tool-call summary row for the scout call; its internal activity is never relayed, and its usage folds into the worker's cost.
+_Removed_ — workers can no longer spawn scouts; a scout is always spawned directly by the orchestrator.
 _Avoid_: grandchild spawn, second-level agent, scout-in-worker
 
 **Folded usage**:

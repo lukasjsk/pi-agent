@@ -5,7 +5,7 @@
 - Deprecate "agents", "subagent" extension, "compact-and-new-session" extension and both prompts in "prompts" directory.
 - New `subagents` extension (spec in [SUBAGENTS_EXTENSION.md](SUBAGENTS_EXTENSION.md), built per map #12 tickets #20–#27), shipping two bundled agents:
   - `worker` — general subagent that does implementation work and leverages skills by self-selecting the ones matching its task.
-  - `scout` — read-only exploration subagent. Worker or top-level orchestrator can spawn it (depth capped at 1).
+  - `scout` — read-only exploration subagent, spawned from the top-level orchestrator (children are leaves; depth is 1).
 - Make subagents configurable:
   - model selection with ordered fallback (per-definition `model` list, per-spawn override)
   - thinking level selection with platform clamp (per-definition `thinkingLevel`, per-spawn override)

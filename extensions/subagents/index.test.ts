@@ -422,13 +422,11 @@ test("an agent-error child reports failed without affecting a completed sibling 
 	assert.equal(scheduler.runningCount, 0, "slots are released for both outcomes");
 });
 
-// ---- §R10.6 worker-side restricted scout tool ----
-
-const { WORKER_AGENT_NAME, SCOUT_TOOL_NAME, createScoutTool } = await import("./index.ts");
+// ---- Injected child tools: leaf roles only, no worker→scout spawner ----
 
 const worker = parseAgentDefinition(
 	"/x/worker.md",
-	"---\nname: worker\ndescription: implements\ntools: [read, bash]\n---\nImplement.",
+	"---\nname: worker\ndescription: implements\ntools: [read, bash, edit, write]\n---\nImplement.",
 	"bundled",
 );
 const userAgent = parseAgentDefinition(
@@ -444,11 +442,10 @@ const depsWithChildTools = {
 		if (name === "custom") return userAgent;
 		throw new UnknownAgentError(`Unknown agent "${name}". Valid agents: scout, worker`);
 	},
-	childTools: () => [createScoutTool(depsWithChildTools)],
 	scoutTools: () => createGitTools(),
 } as typeof deps;
 
-test("worker sessions receive the restricted scout tool via customTools (§R10.6)", async () => {
+test("a worker receives no injected tools: no subagent/scout spawner, write kept", async () => {
 	const captured: Array<Record<string, unknown>> = [];
 	platformHooks.createAgentSession = async (options) => {
 		captured.push(options);
@@ -463,48 +460,14 @@ test("worker sessions receive the restricted scout tool via customTools (§R10.6
 	await execute({ agent: "worker", task: "Build it." }, undefined, undefined);
 
 	const options = captured[0];
-	const injected = (options.customTools as Array<{ name: string }>) ?? [];
-	assert.equal(injected.length, 1);
-	assert.equal(injected[0].name, SCOUT_TOOL_NAME);
-	assert.ok((options.tools as string[]).includes(SCOUT_TOOL_NAME), "custom tool name is in the allowlist");
-	assert.deepEqual((options.tools as string[]).slice(0, 2), ["read", "bash"]);
+	assert.equal(options.customTools, undefined, "worker gets no injected custom tools");
+	const tools = options.tools as string[];
+	assert.ok(!tools.includes("subagent"), "worker never gets the general subagent tool");
+	assert.ok(!tools.includes("scout"), "worker never gets a restricted scout tool");
+	assert.ok(tools.includes("write"), "worker keeps write access");
 });
 
-test("the worker-side tool has no agent parameter and always spawns the scout (§R10.6)", async () => {
-	const scoutSessions: Array<Record<string, unknown>> = [];
-	platformHooks.createAgentSession = async (options) => {
-		scoutSessions.push(options);
-		return {
-			session: fakeSession({
-				messages: [{ role: "assistant", content: [{ type: "text", text: "## Start Here\nREADME.md:1" }] }],
-			}),
-		};
-	};
-
-	// The same tool object the worker session would receive via deps.childTools.
-	const scoutTool = createScoutTool(depsWithChildTools) as unknown as {
-		parameters: { properties: Record<string, unknown> };
-		execute: (id: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) =>
-			Promise<{ content: Array<{ text: string }>; details: { status: string } }>;
-	};
-
-	const properties = scoutTool.parameters.properties as Record<string, unknown>;
-	assert.ok("task" in properties);
-	assert.equal("agent" in properties, false, "no agent parameter on the restricted tool");
-	assert.equal("model" in properties, true);
-	assert.equal("thinkingLevel" in properties, true);
-
-	const result = await scoutTool.execute("call-1", { task: "Recon the repo." }, undefined, undefined);
-	assert.match(result.content[0].text, /## Start Here/);
-	assert.equal(result.details.status, "completed");
-	assert.equal(scoutSessions.length, 1, "the tool spawned exactly the scout");
-	const scoutSession = scoutSessions[0];
-	const injected = (scoutSession.customTools as Array<{ name: string }> | undefined) ?? [];
-	assert.deepEqual(injected.map((t) => t.name), [...GIT_TOOL_NAMES], "scouts get the git-history tools and never a subagent tool");
-	assert.deepEqual(scoutSession.tools, ["read", "grep", ...GIT_TOOL_NAMES], "injected tool names are appended to the allowlist");
-});
-
-test("a scout never receives a subagent tool and user-defined agents get none (depth stays 1, §R10.6)", async () => {
+test("a scout never receives a subagent tool and user-defined agents get none (children are leaves)", async () => {
 	const captured: Array<Record<string, unknown>> = [];
 	platformHooks.createAgentSession = async (options) => {
 		captured.push(options);
@@ -523,49 +486,6 @@ test("a scout never receives a subagent tool and user-defined agents get none (d
 	const scoutInjected = (captured[0].customTools as Array<{ name: string }> | undefined) ?? [];
 	assert.deepEqual(scoutInjected.map((t) => t.name), [...GIT_TOOL_NAMES], "scout gets leaf git tools, never a subagent tool");
 	assert.equal(captured[1].customTools, undefined, "user-defined agents get no injected tools");
-});
-
-test("parallel scouts from one worker share the global cap (§R10.6)", async () => {
-	const { releases, hook } = gatedPromptHook();
-	platformHooks.createAgentSession = hook;
-	const tightDeps = { ...depsWithChildTools, scheduler: new SpawnScheduler(1) };
-	const scoutTool = createScoutTool(tightDeps) as unknown as {
-		execute: (id: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) => Promise<unknown>;
-	};
-
-	const first = scoutTool.execute("c1", { task: "Scout one." });
-	const second = scoutTool.execute("c2", { task: "Scout two." });
-	await new Promise((r) => setTimeout(r, 0));
-	assert.equal(releases.length, 1, "cap 1 → only one scout session created initially");
-
-	releases[0]();
-	await new Promise((r) => setTimeout(r, 0));
-	assert.equal(releases.length, 2, "second scout started only after the first freed the slot");
-	releases[1]();
-	await Promise.all([first, second]);
-});
-
-test("the scout tool shares the deps object whose scheduler is assigned later (regression)", async () => {
-	// Production wiring order: deps exists first, childTools closes over it, THEN the
-	// scheduler is assigned. A spread-copy of deps broke this: worker-spawned scouts got
-	// a scheduler-less deps and every call died with
-	// 'Cannot read properties of undefined (reading \u2018run\u2019)'.
-	const lateDeps = { ...deps, resolveAgent: depsWithChildTools.resolveAgent, scheduler: undefined as never } as typeof deps;
-	lateDeps.childTools = () => [createScoutTool(lateDeps)];
-	lateDeps.scheduler = new SpawnScheduler();
-
-	platformHooks.createAgentSession = async () => ({
-		session: fakeSession({
-			messages: [{ role: "assistant", content: [{ type: "text", text: "## Start Here\nx" }] }],
-		}),
-	});
-
-	const scoutTool = lateDeps.childTools()[0] as unknown as {
-		execute: (id: string, params: unknown) => Promise<{ details: { status: string } }>;
-	};
-	const result = await scoutTool.execute("c1", { task: "Recon." }); // threw before the fix
-	assert.equal(result.details.status, "completed");
-	assert.equal(lateDeps.scheduler.runningCount, 0, "the shared scheduler's slot is released");
 });
 
 // ---- §R10.5 TUI presentation ----

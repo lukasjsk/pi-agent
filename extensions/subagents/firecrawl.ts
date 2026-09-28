@@ -4,8 +4,8 @@
 // arbitrary command surface.
 //
 // Children never load extensions (spec §R1.4), so these ToolDefinitions reach the child
-// through the `childTools` injection path — the same wiring that gives a worker its
-// restricted scout tool (see index.ts). They are NOT registered as top-level pi tools.
+// through the `childTools` injection path (the scout's git-history tools ride the same path;
+// see index.ts). They are NOT registered as top-level pi tools.
 //
 // Platform-light: the argv mapping (buildFirecrawlArgs) is a pure function and the process
 // runner is injectable, so both are unit-testable without spawning a real CLI. The only

@@ -115,9 +115,10 @@ export interface SpawnRunOptions {
 	signal?: AbortSignal;
 	/** Live child activity relay into the tool call's rendering via onUpdate. */
 	onActivity?: (activity: SubagentActivity) => void;
-	/** Custom tools injected into the child session (§R10.6: worker → restricted scout tool).
-	 *  Their names are appended to the tools allowlist per the SDK contract; only the caller
-	 *  (orchestrator executor) decides which definitions get them — depth stays 1. */
+	/** Custom tools injected into the child session (roles that forgo `bash`: the researcher's
+	 *  firecrawl set and the scout's git-history set). Their names are appended to the tools
+	 *  allowlist per the SDK contract; only the caller (orchestrator executor) decides which
+	 *  definitions get them — children are always leaves, no subagent tool. */
 	childTools?: ToolDefinition[];
 	/** Backoff before each transient same-model retry (§R4.2a); tests pass 0. */
 	retryBackoffMs?: number;

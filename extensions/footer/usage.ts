@@ -55,7 +55,7 @@ export function calculateUsage(branch: readonly SessionMessageEvent[]): {
       if (message.stopReason === "error" || message.stopReason === "aborted") return acc;
       return sumUsage(acc, message.usage as UsageShape);
     }
-    // Tool results (subagent children, incl. nested scout spawns): the platform's
+    // Tool results (subagent children): the platform's
     // getSessionStats() and built-in footer sum these too — no stopReason to filter.
     if (message.role === "toolResult") {
       return sumUsage(acc, message.usage as UsageShape);

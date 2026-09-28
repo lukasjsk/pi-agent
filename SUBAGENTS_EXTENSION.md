@@ -36,8 +36,9 @@ non-interactive child agent sessions (**subagents**) via a general subagent-spaw
    children.
 5. Children are **non-interactive**: they cannot render question UI. Questions surface only via their structured
    output; the orchestrator relays them to the user.
-6. Spawn depth is capped at **1 below the orchestrator**: orchestrator → worker → scout. Workers get a *restricted
-   subagent tool* (scout-only) via `customTools` (§R8). No child ever receives a general subagent tool.
+6. Spawn depth is **1 below the orchestrator**: children are leaves. No child ever receives a general subagent
+   tool, and the former worker-side scout spawner has been removed — a worker does its own reconnaissance and
+   cannot spawn any subagent.
 7. Children **inherit the orchestrator's cwd**, passed explicitly via `createAgentSession({ cwd })`. cwd is not a
    per-spawn override.
 8. Esc cancels running children with a partial-result report (§R9).
@@ -81,8 +82,8 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
   every claim carries an exact `file:line` reference.
 
 **`worker`** — general-purpose implementation work.
-- `tools: [read, bash, edit, write, grep, find, ls]` + the restricted scout-spawning tool (injected via
-  `customTools`, §R8).
+- `tools: [read, bash, edit, write, grep, find, ls]` — full write access. No injected tools: a worker cannot
+  spawn subagents and does its own reconnaissance.
 - `skills: on` (see §R10 for leverage behavior).
 - Model chain (user-tuned):
   `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@max` →
@@ -93,7 +94,7 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 - `tools: [read, grep, find, ls]` — read-only against the workspace, **no bash**. Its live-web surface is not in the
   frontmatter allowlist: a set of purpose-built `firecrawl_*` tools (`firecrawl_search`, `firecrawl_scrape`,
   `firecrawl_map`, `firecrawl_crawl`, `firecrawl_research`, `firecrawl_developer`) is **injected via `customTools`**
-  (the same path as the worker's scout tool, §R8/§R10.6) and appended to the child's tool list at session creation.
+  (the same path as the scout's git-history tools, §R8/§R12) and appended to the child's tool list at session creation.
   Each tool wraps one firecrawl CLI subcommand via `execFile` (no shell): the subcommand + primary argument(s) are
   typed parameters, extra flags ride in an `options` string array of individual argv tokens, so a researcher cannot
   run arbitrary commands. Because these names never appear in the frontmatter `tools` list, §R5.2's unknown-name
@@ -214,10 +215,9 @@ One registered tool, **blocking**, params:
    matched); quiet when none.
 5. **TUI presentation:** superseded by **§R11 — TUI observability** (map #30), which holds the full contract;
    the live-view refinement of this item has been promoted there.
-6. **Worker-side restricted tool (from #14, #17):** the same tool, injected via `customTools`, but with no `agent`
-   parameter — it **always spawns the bundled `scout`**; params: `task` + optional `model`/`thinkingLevel`.
-   Parallel scouts from a worker are allowed under the same global cap. User-defined agents are never spawnable by
-   workers; depth stays 1.
+6. **Worker-side restricted tool (from #14, #17) — REMOVED:** the scout-only spawner injected into worker
+   sessions was removed so `worker` is a leaf. `scout` is still spawned directly by the orchestrator through the
+   general `subagent` tool under the same global cap. Depth stays 1.
 7. **Researcher-side firecrawl tools:** the `researcher`'s children receive the `firecrawl_*` tool set via the same
    `customTools` injection (§R3). These are leaf capability tools (not a subagent spawner), so they do not affect
    spawn depth; a researcher never receives any subagent tool.
@@ -228,8 +228,7 @@ One registered tool, **blocking**, params:
 
 The full presentation and accounting contract for subagents in the orchestrator's TUI. Written off the
 Decisions-so-far of map "observability for the subagents extension" (tickets #31–#36, #38, #35); supersedes #27's
-original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Content line**, **Nested scout**,
-**Folded usage**.
+original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Content line**, **Folded usage**.
 
 1. **Framing (#33):** the row renders itself (`renderShell: "self"`) inside a `DynamicBorder` in a role/status
    color: role color while running (accent for worker, muted for scout), status color when settled
@@ -248,10 +247,10 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
    **Settled expanded** is a hybrid: report body, structured footer sections in fixed order ending with
    files-touched and the overflow-path line, provenance, and the full persisted tool-call list. Raw tool outputs
    are never shown.
-4. **Nested scouts (#36):** a worker's scout spawn renders as an ordinary tool-call summary row among the worker's
-   rows (collapsed and expanded — flattened). The scout's internal activity is never relayed to the orchestrator.
-   Scout cost folds into the worker's total; no per-scout split, no depth marker. Depth-1 is an
-   extension-enforced invariant, not per-row information.
+4. **Nested scouts (#36) — no longer applies:** workers cannot spawn subagents, so there is no nested-scout row
+   to render. A scout spawned directly by the orchestrator renders as its own top-level row. Depth-1 (children are
+   leaves) is an extension-enforced invariant, not per-row information; **Folded usage** still covers failed
+   fallback retries and cancelled partial runs.
 5. **Payload contract (#35):** the tool result's `details` is a live/settled union, evolved additively — renderers
    tolerate absent fields, no migration for in-flight sessions.
    - **Live** (streamed via `onUpdate`, transient): `status: "running"` + activity — bounded progress tail
@@ -331,7 +330,8 @@ Phased so each step is testable in isolation; platform references are to the pi 
 4. **Orchestrator tool** — blocking execute, `onUpdate` progress relay from child events, statuses, 10KB cap +
    overflow files, `details` payload, Esc handling, concurrency cap 4 + queue.
 5. **Output contract** — JSON footer parse with graceful degradation, provenance append, truncation.
-6. **Worker-side restricted tool** — scout-only injection via `customTools`, depth enforcement.
+6. **Worker-side restricted tool** — *removed*: worker is a leaf; depth is enforced by injecting no subagent
+   tool into any child.
 7. **TUI observability** — implemented per §R11: bordered self-shell framing, two-line live header, 3-row
    collapsed tail, live payload thinking/tokens, settled `calls` list with omission marker, and failed-retry
    usage folding.

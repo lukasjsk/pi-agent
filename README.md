@@ -6,7 +6,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 
 | Path | Purpose |
 | --- | --- |
-| [`extensions/subagents/`](extensions/subagents) | A `subagent` tool that lets the orchestrator delegate work to isolated, ephemeral child sessions. Ships bundled `worker` (implementation), `scout` (read-only exploration, with injected `git_history`/`git_show` tools), and `researcher` (live-web research via injected `firecrawl_*` tools, no `bash`) agent definitions with model fallback, structured reports, a concurrency cap with queueing, Esc cancellation, and workers spawning read-only scouts at depth 1. Users can override or add agent definitions in `~/.pi/agent/agents/*.md`. Spec: [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md). |
+| [`extensions/subagents/`](extensions/subagents) | A `subagent` tool that lets the orchestrator delegate work to isolated, ephemeral child sessions. Ships bundled `worker` (implementation), `scout` (read-only exploration, with injected `git_history`/`git_show` tools), and `researcher` (live-web research via injected `firecrawl_*` tools, no `bash`) agent definitions with model fallback, structured reports, a concurrency cap with queueing, and Esc cancellation. Children are leaves — no subagent tool is injected into any child. Users can override or add agent definitions in `~/.pi/agent/agents/*.md`. Spec: [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md). |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
 | [`extensions/ask-user-question/index.ts`](extensions/ask-user-question/index.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
 | [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
@@ -54,17 +54,22 @@ npx skills experimental_install
 ```
 
 
-### Orchestrator-only mode (optional)
+### Orchestrator preference (optional)
 
-To make the main agent an orchestrator — no built-in tools, all work delegated to subagents — restrict the default tool selection in Pi's settings (`~/.pi/agent/settings.json`, or project-local `.pi/settings.json`). Extension tool names are accepted in `defaultTools`; configuring it also disables the auto-enable of other extension tools, so the listed names become the exact tool set:
+The subagents extension is designed for a delegating main agent, but that is a matter of
+intent, not capability — keeping the top-level agent's write tools is deliberate, so it can
+handle a simple task directly or act on an explicit user request without a per-invocation
+override. There is no tool-restriction recipe to apply here (and none is recommended).
 
-```json
-{
-  "defaultTools": ["subagent", "ask_user_question"]
-}
-```
+Express the preference as a soft instruction in your `AGENTS.md` instead, for example:
 
-The main agent then starts with only `subagent` and `ask_user_question`, while `read`, `bash`, `edit`, and `write` are off. Pair this with an orchestrator instruction in your `AGENTS.md` (for example: "Never perform work directly; delegate every task to a subagent and synthesize their reports."), since the tool restriction enforces capability but not intent. Override per invocation with `pi -t read,bash,edit,write` (or `-xt` / `-nt`) when you need direct tools in a specific session.
+> Prefer delegating substantial work to subagents — `scout` for exploration, `worker` for
+> implementation, `researcher` for live-web research — and synthesize their reports. Do simple
+> tasks directly when that is clearly cheaper, and always follow an explicit request to do the
+> work yourself.
+
+The instruction shapes behavior without blocking any tool. If you ever do want a hard,
+capability-level restriction, that remains available through Pi's `defaultTools` setting (extension tool names are valid entries); it is simply not the default this repo ships.
 
 ## Deprecated workflow
 
