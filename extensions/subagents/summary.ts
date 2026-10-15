@@ -2,9 +2,14 @@
 // Kept free of any TUI imports so spawn-side relay code can use it without pulling
 // in the platform's component layer.
 
+/** Collapse whitespace runs to single spaces. */
+export function flatten(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
 /** One-line task excerpt, newlines flattened. */
 export function excerpt(task: string, max = 48): string {
-	const flat = task.replace(/\s+/g, " ").trim();
+	const flat = flatten(task);
 	return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 

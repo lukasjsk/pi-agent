@@ -238,12 +238,12 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
    **two-line header** — line 1: role · task excerpt; line 2: model (`provider/id`) · effective thinking level ·
    elapsed · running tokens · live cost (4-decimal; omitted until the first usage-bearing message settles). Below:
    the last **3** tool-call summary rows (`status marker · tool name · single primary target`: ✓ done, ✗ error,
-   ◦ running; no args, no results), then the last **3** content lines (raw, per-line display cap 100 + `…`).
+   ◦ running; no args, no results), then the last **3** content lines (raw, cut to terminal width at render time).
    The flat progress string is not part of the running row. Queued spawns render as one dim line
    (`… queued · role · n ahead`) with no rows.
 3. **Expanded view (#32, as amended by #35):** expansion is the platform's global Ctrl+O (`options.expanded`); no
    per-row affordance. **Running expanded** shows the same structure with every relayed row: all 20 tool-call ring
-   entries and all 10 content lines (per-line display cap 160) — the live *tail*, not a transcript.
+   entries and all 10 content lines (cut to terminal width at render time) — the live *tail*, not a transcript.
    **Settled expanded** is a hybrid: report body, structured footer sections in fixed order ending with
    files-touched and the overflow-path line, provenance, and the full persisted tool-call list. Raw tool outputs
    are never shown.
@@ -254,9 +254,10 @@ original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Conte
 5. **Payload contract (#35):** the tool result's `details` is a live/settled union, evolved additively — renderers
    tolerate absent fields, no migration for in-flight sessions.
    - **Live** (streamed via `onUpdate`, transient): `status: "running"` + activity — bounded progress tail
-     (~330 chars; the queued notice pre-run), tool-call ring (max **20**), content lines (ring max **10**, relay
-     cap **200 chars/line**, assistant text only), `model`, `effectiveThinkingLevel`, running `tokens`
-     (`{input, output}`), display-only `cost`.
+     (~330 chars; the queued notice pre-run), tool-call ring (max **20**, summaries relay-capped at **500**
+     chars), content lines (ring max **10**, relay cap **500 chars/line**, assistant text only), `model`,
+     `effectiveThinkingLevel`, running `tokens` (`{input, output}`), display-only `cost`. Relay caps are generous
+     bounds only — the display cut is to terminal width, at render time.
    - **Settled** (persisted — the replay source): `status`, `agent`, `report`, `footer`, `diagnostics`,
      provenance (`modelUsed`, requested/effective thinking), `overflowPath`, `usage` (total-across-attempts),
      `calls` — the **full** tool-call list, cap **1000** with an omission marker. Content lines are dropped at

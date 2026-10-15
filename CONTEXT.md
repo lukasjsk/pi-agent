@@ -55,7 +55,7 @@ The one-line digest of a subagent's tool call shown in the collapsed row: tool n
 _Avoid_: tool log, call trace, activity entry (the payload record it renders from)
 
 **Content line**:
-A raw, unwrapped source line of a subagent's visible generated text (assistant text only; thinking/reasoning excluded). The collapsed row shows the last three; lines are shown raw — never markdown-stripped — with a per-line cap and `…` marker.
+A raw, unwrapped source line of a subagent's visible generated text (assistant text only; thinking/reasoning excluded). The collapsed row shows the last three; lines are shown raw — never markdown-stripped — and are cut only at render time, to terminal width.
 _Avoid_: output line, transcript tail, display line
 
 **Nested scout**:

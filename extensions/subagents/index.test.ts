@@ -617,7 +617,7 @@ test("live activity view collapsed caps: 3 tool rows and 3 content lines; expand
 	assert.match(expanded, /  line 0/);
 });
 
-test("content lines are capped raw with an ellipsis marker; cost hidden while zero", () => {
+test("content lines stay raw for render-time width truncation; cost hidden while zero", () => {
 	const text = renderSubagentResult(
 		{
 			details: {
@@ -633,7 +633,7 @@ test("content lines are capped raw with an ellipsis marker; cost hidden while ze
 		theme,
 		{ state: {}, args: { agent: "scout", task: "T" } },
 	).text.replace(/\x1b\[[0-9;]*m/g, "");
-	assert.match(text, /  x{100}…$/, "per-line cap with … marker, raw text otherwise");
+	assert.match(text, /  x{150}$/, "no fixed display cap — render time truncates to terminal width");
 	assert.doesNotMatch(text, /\$/, "no cost line until usage has been seen");
 });
 
@@ -687,6 +687,19 @@ test("expanded settled shows the full persisted tool-call list with an omission 
 	assert.match(text, /Tool calls\n  … 2 earlier call\(s\) omitted\n  ✓ read f0\.ts\n  ✓ read f1\.ts\n  ✓ read f2\.ts\n  ✓ read f3\.ts$/m);
 	// Content lines are dropped at settle — the report supersedes them.
 	assert.doesNotMatch(text, /contentLines/);
+});
+
+test("every rendered element is one terminal line (TUI height contract)", () => {
+	const calls = [{ toolCallId: "0", toolName: "read", summary: "f0.ts", status: "done" as const }];
+	const state: Record<string, unknown> = {};
+	renderSubagentCall({ agent: "worker", task: "Recon the repo." }, theme, { state });
+	const row = renderSubagentResult(
+		{ details: { ...settledDetails, calls } },
+		{ expanded: true, isPartial: false },
+		theme,
+		{ state, args: { agent: "worker", task: "Recon" } },
+	);
+	for (const line of row.render(80)) assert.ok(!line.includes("\n"), `embedded newline: ${JSON.stringify(line)}`);
 });
 
 test("the settled row shifts the frame to the status color and keeps it constant (§R11.1)", () => {

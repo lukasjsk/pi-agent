@@ -14,7 +14,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SubagentToolDetails } from "./index.ts";
-import { excerpt } from "./summary.ts";
+import { flatten } from "./summary.ts";
 
 /** Re-exported for existing importers; the digest helpers live in summary.ts. */
 export { excerpt } from "./summary.ts";
@@ -95,11 +95,6 @@ const STATUS_ICON: Record<RenderStatus, string> = {
 	failed: "✗",
 	cancelled: "⊘",
 };
-
-/** Per-line display cap for raw content lines (CONTEXT.md "Content line"). */
-export function capLine(line: string, max = 100): string {
-	return line.length > max ? `${line.slice(0, max)}…` : line;
-}
 
 /** Extract the child's role from the tool call args (both tool variants). */
 export function roleOf(args: { agent?: string } | undefined): string {
@@ -183,7 +178,7 @@ export function renderSubagentCall(
 	const state = context.state as RowFrameState;
 	state.startedAt ??= Date.now();
 	state.border ??= borderKey("running", roleOf(args));
-	const line = theme.fg("toolTitle", theme.bold(roleOf(args))) + theme.fg("dim", ` · "${excerpt(args?.task ?? "")}"`);
+	const line = theme.fg("toolTitle", theme.bold(roleOf(args))) + theme.fg("dim", ` · "${flatten(args?.task ?? "")}"`);
 	return new FramedRow(theme, state, (width) => [borderRule(state, theme, width), line], line);
 }
 
@@ -220,7 +215,7 @@ export function renderSubagentResult(
 		const header: string[] = [statusLine(status, theme)];
 		if (status === "queued") {
 			header.push(theme.fg("toolTitle", roleOf(context.args)));
-			if (progress) header.push(theme.fg("dim", excerpt(progress, options.expanded ? 160 : 60)));
+			if (progress) header.push(theme.fg("dim", flatten(progress)));
 		} else {
 			if (live?.model) header.push(theme.fg("dim", live.model));
 			if (live?.effectiveThinkingLevel) header.push(theme.fg("dim", live.effectiveThinkingLevel));
@@ -238,7 +233,7 @@ export function renderSubagentResult(
 		}
 		const shown = options.expanded ? contentLines : contentLines.slice(-LIVE_CONTENT_LINES);
 		for (const content of shown) {
-			rows.push(`  ${theme.fg("toolOutput", capLine(content, options.expanded ? 160 : 100))}`);
+			rows.push(`  ${theme.fg("toolOutput", content)}`);
 		}
 		return framed(state, theme, rows);
 	}
@@ -269,29 +264,25 @@ export function renderSubagentResult(
 	}
 
 	// Expanded: the structured report, each part visually separate (§R11.3).
+	// The TUI contract is one array element per terminal line, so every block is
+	// pushed line by line (theme restyled per line — the TUI resets styling between lines).
 	if (details && "report" in details && details.report) {
 		rows.push("");
-		rows.push(theme.fg("toolOutput", details.report));
+		for (const line of details.report.split("\n")) rows.push(theme.fg("toolOutput", line));
 	}
 	if (details && "footer" in details && details.footer.decisionPoints.length) {
 		rows.push("");
-		rows.push(
-			theme.fg("toolTitle", "Decision points") +
-				"\n" +
-				details.footer.decisionPoints
-					.map((d) => theme.fg("text", `  • ${d.decision}`) + theme.fg("dim", ` — ${d.rationale}`))
-					.join("\n"),
-		);
+		rows.push(theme.fg("toolTitle", "Decision points"));
+		for (const d of details.footer.decisionPoints) {
+			rows.push(theme.fg("text", `  • ${flatten(d.decision)}`) + theme.fg("dim", ` — ${flatten(d.rationale)}`));
+		}
 	}
 	if (details && "footer" in details && details.footer.openQuestions.length) {
 		rows.push("");
-		rows.push(
-			theme.fg("toolTitle", "Open questions") +
-				"\n" +
-				details.footer.openQuestions
-					.map((q) => theme.fg("text", `  ? ${q.question}`) + theme.fg("dim", ` — ${q.whyItMatters}`))
-					.join("\n"),
-		);
+		rows.push(theme.fg("toolTitle", "Open questions"));
+		for (const q of details.footer.openQuestions) {
+			rows.push(theme.fg("text", `  ? ${flatten(q.question)}`) + theme.fg("dim", ` — ${flatten(q.whyItMatters)}`));
+		}
 	}
 	const provenance: string[] = [];
 	if (details && "modelUsed" in details && details.modelUsed) provenance.push(`model: ${details.modelUsed}`);
@@ -301,17 +292,16 @@ export function renderSubagentResult(
 	if (details && "diagnostics" in details) provenance.push(...details.diagnostics.map((d) => `note: ${d}`));
 	if (provenance.length) {
 		rows.push("");
-		rows.push(theme.fg("dim", provenance.map((p) => `· ${p}`).join("\n")));
+		for (const p of provenance) rows.push(theme.fg("dim", `· ${p}`));
 	}
 	// The full persisted tool-call list, last section (§R11.3).
 	const calls = details && "calls" in details ? details.calls : undefined;
 	if (calls?.length) {
 		const omitted = details && "callsOmitted" in details ? details.callsOmitted : undefined;
-		const callRows: string[] = [];
-		if (omitted) callRows.push(theme.fg("dim", `  … ${omitted} earlier call(s) omitted`));
-		for (const call of calls) callRows.push(toolRow(call, theme));
 		rows.push("");
-		rows.push(theme.fg("toolTitle", "Tool calls") + "\n" + callRows.join("\n"));
+		rows.push(theme.fg("toolTitle", "Tool calls"));
+		if (omitted) rows.push(theme.fg("dim", `  … ${omitted} earlier call(s) omitted`));
+		for (const call of calls) rows.push(toolRow(call, theme));
 	}
 	return framed(state, theme, rows);
 }

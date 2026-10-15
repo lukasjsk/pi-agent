@@ -4,8 +4,13 @@ This log records notable functionality added to this configuration repository. S
 
 ## 2026-10-15
 
+### Changed
+
+- The subagent row's live relay caps were raised from display caps to generous payload bounds (content lines 200 → 500 chars/line; tool-call summaries now relay-capped at 500 chars) — the display cut happens at render time, to terminal width, so a long command is no longer clipped in the collapsed row. `scout`, `researcher`, and `worker` gained `openrouter/anthropic/claude-haiku-5.5@high` as the second entry of their fallback chains, between the local primary and the Copilot entry.
+
 ### Fixed
 
+- Expanding and collapsing a finished subagent run no longer corrupts the bottom of the screen. The settled expanded view pushed multi-line blocks (report body, decision points, open questions, provenance, tool-call list) as single array elements, but the TUI counts one terminal line per element — the frame drew taller than its bookkeeping, so the footer and the "jump to latest message" overlay landed on live text and stale lines survived collapse. `render.ts` now pushes every block line by line (restyled per line, since the TUI resets styling between lines), and a regression test asserts no rendered element carries an embedded newline.
 - The repository's `slop` theme now loads again. Its `colors` block carried two roles the theme schema no longer defines — `separator` and `chatModeBorder` — and the schema is strict (`additionalProperties: false`), so either key made the whole file invalid and Pi fell back to the system theme with `/colors/separator: schema is false` at startup. Both keys are removed and the file now carries exactly the schema's required and optional roles. Neither role is read by the current UI, so the rendered palette is unchanged.
 
 ## 2026-09-28

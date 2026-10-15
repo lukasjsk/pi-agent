@@ -139,12 +139,15 @@ export function validateToolNames(definition: AgentDefinition): void {
 }
 
 const PROGRESS_TAIL_CHARS = 300;
-/** Activity relay bounds: content lines kept per update and per-line payload cap (raw display
- *  caps are applied at render time, see CONTEXT.md "Content line"). */
+/** Activity relay bounds: content lines kept per update and per-line payload cap. The caps are
+ *  generous relay bounds only — display truncation happens at render time, to terminal width
+ *  (CONTEXT.md "Content line"). */
 const CONTENT_LINE_TAIL = 10;
-const CONTENT_LINE_PAYLOAD_CAP = 200;
+const CONTENT_LINE_PAYLOAD_CAP = 500;
 /** Tool-call summaries relayed per update (oldest dropped first). */
 const TOOL_CALL_TAIL = 20;
+/** Relay bound for a tool-call summary line; render time truncates to terminal width. */
+const TOOL_CALL_SUMMARY_CAP = 500;
 /** Settled calls-list cap (§R11.5): the full list up to 1000, oldest dropped. */
 const CALLS_CAP = 1000;
 
@@ -334,7 +337,7 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			toolCalls.push({
 				toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName}#${toolCalls.length}`,
 				toolName: event.toolName,
-				summary: toolCallSummary(event.toolName, event.args),
+				summary: toolCallSummary(event.toolName, event.args, TOOL_CALL_SUMMARY_CAP),
 				status: "running",
 			});
 			emitActivity();
