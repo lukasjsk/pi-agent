@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-10-15
+
+### Fixed
+
+- The repository's `slop` theme now loads again. Its `colors` block carried two roles the theme schema no longer defines — `separator` and `chatModeBorder` — and the schema is strict (`additionalProperties: false`), so either key made the whole file invalid and Pi fell back to the system theme with `/colors/separator: schema is false` at startup. Both keys are removed and the file now carries exactly the schema's required and optional roles. Neither role is read by the current UI, so the rendered palette is unchanged.
+
 ## 2026-09-28
 
 ### Changed
