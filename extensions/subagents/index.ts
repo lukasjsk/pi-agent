@@ -60,7 +60,7 @@ export type SubagentToolDetails =
 	| {
 			status: "running";
 			progress: string;
-			/** Live activity relay (CONTEXT.md "Tool-call summary" / "Content line"); absent on the queued notice. */
+			/** Live activity relay (GLOSSARY.md "Tool-call summary" / "Content line"); absent on the queued notice. */
 			toolCalls?: readonly SubagentToolCallSummary[];
 			contentLines?: readonly string[];
 			model?: string;

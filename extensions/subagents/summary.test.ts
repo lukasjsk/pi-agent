@@ -1,4 +1,4 @@
-// Tool-call summary digests (CONTEXT.md "Tool-call summary"): one line per call —
+// Tool-call summary digests (GLOSSARY.md "Tool-call summary"): one line per call —
 // tool name handled by the row, here the single primary target.
 
 import assert from "node:assert/strict";

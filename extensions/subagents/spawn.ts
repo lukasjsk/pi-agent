@@ -23,7 +23,7 @@ import { refId, type ChainEntry, type ModelRef } from "./models.ts";
 import { toolCallSummary } from "./summary.ts";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-/** One tool call of a running child, digested to a single line (CONTEXT.md "Tool-call summary"). */
+/** One tool call of a running child, digested to a single line (GLOSSARY.md "Tool-call summary"). */
 export interface SubagentToolCallSummary {
 	toolCallId: string;
 	toolName: string;
@@ -32,7 +32,7 @@ export interface SubagentToolCallSummary {
 	status: "running" | "done" | "error";
 }
 
-/** The child's live activity, relayed into the orchestrator's onUpdate (CONTEXT.md
+/** The child's live activity, relayed into the orchestrator's onUpdate (GLOSSARY.md
  *  "Tool-call summary" / "Content line"). `progress` keeps the legacy flat digest
  *  (tool names + streamed tail) that drives the queued check and the partial
  *  content text; the structured fields drive the richer live rows. */
@@ -141,7 +141,7 @@ export function validateToolNames(definition: AgentDefinition): void {
 const PROGRESS_TAIL_CHARS = 300;
 /** Activity relay bounds: content lines kept per update and per-line payload cap. The caps are
  *  generous relay bounds only — display truncation happens at render time, to terminal width
- *  (CONTEXT.md "Content line"). */
+ *  (GLOSSARY.md "Content line"). */
 const CONTENT_LINE_TAIL = 10;
 const CONTENT_LINE_PAYLOAD_CAP = 500;
 /** Tool-call summaries relayed per update (oldest dropped first). */

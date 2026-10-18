@@ -1,4 +1,4 @@
-// Pure text digests for the live subagent view (CONTEXT.md "Tool-call summary").
+// Pure text digests for the live subagent view (GLOSSARY.md "Tool-call summary").
 // Kept free of any TUI imports so spawn-side relay code can use it without pulling
 // in the platform's component layer.
 
@@ -14,7 +14,7 @@ export function excerpt(task: string, max = 48): string {
 }
 
 /** The call's single primary target, digested to one line: file path, command head,
- *  task excerpt, or URL — never the full arguments (CONTEXT.md "Tool-call summary"). */
+ *  task excerpt, or URL — never the full arguments (GLOSSARY.md "Tool-call summary"). */
 export function toolCallSummary(toolName: string, args: unknown, max = 48): string {
 	const a = (args ?? {}) as Record<string, unknown>;
 	const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);

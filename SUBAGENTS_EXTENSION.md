@@ -2,7 +2,7 @@
 
 Hand-off spec for implementing a new `subagents` extension for pi. Plan + requirements; decisions are locked on
 [map #12](https://github.com/lukasjsk/pi-agent/issues/12) (tickets #13–#19, all resolved) — each section cites its ticket.
-Domain language: see [CONTEXT.md](CONTEXT.md). Source task: [PLANNED_FEATURES.md](PLANNED_FEATURES.md) lines 4–6.
+Domain language: see [GLOSSARY.md](GLOSSARY.md). Source task: [PLANNED_FEATURES.md](PLANNED_FEATURES.md) lines 4–6.
 
 **Reference only (greenfield — no behavior inherited by default):** `deprecated/extensions/subagent/`.
 
@@ -228,7 +228,7 @@ One registered tool, **blocking**, params:
 
 The full presentation and accounting contract for subagents in the orchestrator's TUI. Written off the
 Decisions-so-far of map "observability for the subagents extension" (tickets #31–#36, #38, #35); supersedes #27's
-original recommendation. Glossary: CONTEXT.md — **Tool-call summary**, **Content line**, **Folded usage**.
+original recommendation. Glossary: GLOSSARY.md — **Tool-call summary**, **Content line**, **Folded usage**.
 
 1. **Framing (#33):** the row renders itself (`renderShell: "self"`) inside a `DynamicBorder` in a role/status
    color: role color while running (accent for worker, muted for scout), status color when settled

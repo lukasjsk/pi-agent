@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-10-18
+
+### Changed
+
+- `CONTEXT.md` is renamed to `GLOSSARY.md`. The file was already a domain glossary — the exact structure the Matt Pocock `/domain-modeling` skill defines (context name, description, `## Language`, `**Term**:` entries with `_Avoid_:` synonyms) — but the skills that consume a project's ubiquitous language read `GLOSSARY.md` (or `GLOSSARY-MAP.md` for a multi-context repo), so the old name hid it from the convention. The glossary's content is unchanged; its references in [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md) and the `extensions/subagents/` source comments were updated, and the README now links the file.
+
 ## 2026-10-15
 
 ### Changed

@@ -451,7 +451,7 @@ test("relays structured child activity: progress, tool summaries, content lines,
 	// Legacy flat digest still present and bounded.
 	assert.match(updates[0].progress, /tools: read/);
 	assert.ok(updates[updates.length - 1].progress.length <= 330, "progress text is a bounded tail");
-	// Tool-call summaries (CONTEXT.md "Tool-call summary"): one line each, status markers.
+	// Tool-call summaries (GLOSSARY.md "Tool-call summary"): one line each, status markers.
 	const last = updates[updates.length - 1];
 	assert.deepEqual(
 		last.toolCalls.map((c) => [c.toolName, c.summary, c.status]),
@@ -460,7 +460,7 @@ test("relays structured child activity: progress, tool summaries, content lines,
 			["bash", "bun test", "error"],
 		],
 	);
-	// Content lines (CONTEXT.md "Content line"): raw non-empty lines, tail-most last.
+	// Content lines (GLOSSARY.md "Content line"): raw non-empty lines, tail-most last.
 	assert.deepEqual(last.contentLines.slice(0, 1), ["first line"]);
 	assert.ok(last.contentLines[last.contentLines.length - 1].startsWith("xxx"));
 	assert.equal(last.contentLines.includes(""), false, "empty lines are dropped");

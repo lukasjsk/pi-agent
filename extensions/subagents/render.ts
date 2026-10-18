@@ -62,7 +62,7 @@ export interface RenderUsage {
 	cacheRead?: number;
 }
 
-/** One tool call of a running child, digested to a single line (CONTEXT.md "Tool-call summary"). */
+/** One tool call of a running child, digested to a single line (GLOSSARY.md "Tool-call summary"). */
 export interface RenderToolCallSummary {
 	toolCallId: string;
 	toolName: string;
