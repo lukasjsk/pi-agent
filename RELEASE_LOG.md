@@ -4,6 +4,10 @@ This log records notable functionality added to this configuration repository. S
 
 ## 2026-10-18
 
+### Added
+
+- [`AGENTS.md`](AGENTS.md) adds project instructions for agents that work in this repository. The instructions set ASD-STE100 Simplified Technical English as the default style for agent output (explanations, instructions, log messages, and tool descriptions) and state when to use that style: dense or ambiguous text, text read by another agent or a translation pipeline, prompts and tool descriptions that must not be ambiguous, and before/after comparison of rule violations. The instructions also state where the style does not apply: creative or marketing text, where voice, nuance, or persuasion is the point. The README contents table lists the new file.
+
 ### Changed
 
 - `CONTEXT.md` is renamed to `GLOSSARY.md`. The file was already a domain glossary — the exact structure the Matt Pocock `/domain-modeling` skill defines (context name, description, `## Language`, `**Term**:` entries with `_Avoid_:` synonyms) — but the skills that consume a project's ubiquitous language read `GLOSSARY.md` (or `GLOSSARY-MAP.md` for a multi-context repo), so the old name hid it from the convention. The glossary's content is unchanged; its references in [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md) and the `extensions/subagents/` source comments were updated, and the README now links the file.
