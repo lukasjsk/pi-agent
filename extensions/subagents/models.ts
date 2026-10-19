@@ -1,5 +1,5 @@
-// Model fallback pipeline (spec §R4): an agent definition's `model` is an ordered
-// list resolved against the parent's model registry.
+// Model fallback pipeline (spec §R4): the agent's model list (from the config file,
+// ~/.pi/agent/subagents.json) is an ordered list resolved against the parent's model registry.
 //   - Per-spawn override REPLACES the list entirely (definitive; no fallback net).
 //   - List entries without a catalogue match or valid auth are skipped at spawn.
 //   - The parent's current model is ALWAYS appended as the final chain entry (deduped),
@@ -77,8 +77,8 @@ function asModelRef(value: unknown): ModelRef | undefined {
 }
 
 export interface ResolveModelsInput {
-	/** The definition's ordered fallback list (may be undefined). */
-	definitionModel?: readonly string[];
+	/** The config file's ordered fallback list for this agent (may be undefined). */
+	configModel?: readonly string[];
 	/** Per-spawn "provider/model-id" override — replaces the list entirely. */
 	overrideModel?: string;
 	/** The orchestrator's current model; the default when neither list nor override is given. */
@@ -114,16 +114,16 @@ export function resolveModelChain(input: ResolveModelsInput): ResolvedModels {
 		return { chain: [{ model: found }], diagnostics: [] };
 	}
 
-	if (input.definitionModel && input.definitionModel.length > 0) {
+	if (input.configModel && input.configModel.length > 0) {
 		if (!input.registry) {
 			throw new ModelResolutionError(
-				`agent fallback list [${input.definitionModel.join(", ")}] cannot be resolved: no model registry available`,
+				`agent fallback list [${input.configModel.join(", ")}] cannot be resolved: no model registry available`,
 			);
 		}
 		const available = new Set(input.registry.getAvailable().map((m) => refId(asModelRef(m)!)));
 		const diagnostics: string[] = [];
 		const chain: ChainEntry[] = [];
-		for (const raw of input.definitionModel) {
+		for (const raw of input.configModel) {
 			const entry = parseModelEntry(raw); // bad format/level fails the spawn (consistent with unknown tools)
 			const ref = entry.model;
 			const found = asModelRef(input.registry.find(ref.provider, ref.id));
@@ -140,14 +140,14 @@ export function resolveModelChain(input: ResolveModelsInput): ResolvedModels {
 		}
 
 		// The orchestrator's model is the final fallback, always — deduped by ref id, so a
-		// definition that lists the parent's own model does not run it twice.
+		// config list that names the parent's own model does not run it twice.
 		if (parentModel && !chain.some((e) => refId(e.model) === refId(parentModel))) {
 			chain.push({ model: parentModel });
 		}
 
 		if (chain.length === 0) {
 			throw new ModelResolutionError(
-				`no usable model in the fallback list or the parent's model [${input.definitionModel.join(", ")}]:\n` +
+				`no usable model in the fallback list or the parent's model [${input.configModel.join(", ")}]:\n` +
 					diagnostics.map((d) => `- ${d}`).join("\n"),
 			);
 		}

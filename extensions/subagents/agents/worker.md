@@ -2,11 +2,6 @@
 name: worker
 description: General-purpose implementation agent. Completes concrete coding tasks in the working directory and reports what was done, which files changed, and anything the caller must know.
 tools: [read, bash, edit, write, grep, find, ls]
-model:
-  - local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium
-  - openrouter/anthropic/claude-haiku-5.5@high
-  - github-copilot/gpt-5.6-luna@max
-thinkingLevel: medium
 skills: on
 ---
 

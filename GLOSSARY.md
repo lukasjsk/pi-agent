@@ -38,8 +38,12 @@ How many subagent levels nest below the orchestrator. Currently 1: the orchestra
 A user-editable markdown file (YAML frontmatter + body) that defines a spawnable subagent role: config fields in frontmatter, the system prompt in the body. Bundled worker/scout/researcher defaults live in the extension; user-level files override by name.
 _Avoid_: agent config, agent spec
 
+**Model config file**:
+The optional `~/.pi/agent/subagents.json` mapping agent names to ordered model fallback lists. Absent file → the subagent runs on the orchestrator's model. Read on every spawn; malformed content warns and is skipped, never failing a spawn.
+_Avoid_: agent config file, model registry
+
 **Model fallback**:
-The ordered `model` list in an agent definition. At spawn the first entry with valid auth is used; on a runtime failure the task transparently moves to the next entry; exhausting the list fails the spawn with diagnostics. A per-spawn model override replaces the list entirely.
+The ordered model list for an agent in the model config file. At spawn the first entry with valid auth is used; on a runtime failure the task transparently moves to the next entry; the orchestrator's model is the terminal fallback, so an exhausted list lands on it rather than failing. A per-spawn model override replaces the list entirely.
 _Avoid_: model chain, retry policy, auto-downgrade
 
 **Overflow report**:

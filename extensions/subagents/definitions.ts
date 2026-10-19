@@ -17,10 +17,6 @@ export interface AgentDefinition {
 	description: string;
 	/** Required tool allowlist applied at child session creation (frontmatter `tools`). */
 	tools: string[];
-	/** Ordered fallback list (frontmatter `model`); execution is ticket #23. */
-	model?: string[];
-	/** Requested thinking level; the platform clamps to model capabilities (frontmatter `thinkingLevel`). */
-	thinkingLevel?: AgentThinkingLevel;
 	/** Whether the child loads user/project skills (frontmatter `skills`, default on). */
 	skills: boolean;
 	/** The markdown body — the agent's system prompt. */
@@ -94,8 +90,11 @@ function parseInlineArray(raw: string): string[] {
 		.filter((item) => item.length > 0);
 }
 
-/** The closed frontmatter field set (spec §R2.2). Unknown fields are ignored with a warning. */
-const KNOWN_FIELDS = new Set(["name", "description", "tools", "model", "thinkingLevel", "skills"]);
+/** The closed frontmatter field set (spec §R2.2). Unknown fields are ignored with a warning.
+ * `model` and `thinkingLevel` are no longer frontmatter fields — model selection lives in the
+ * per-agent config file (~/.pi/agent/subagents.json); a definition carrying either gets an
+ * unknown-field warning and the value is ignored. */
+const KNOWN_FIELDS = new Set(["name", "description", "tools", "skills"]);
 
 /** Parse one agent definition file's contents. Throws DefinitionError on invalid definitions; unknown fields warn. */
 export function parseAgentDefinition(filePath: string, contents: string, source: AgentSource): AgentDefinition {
@@ -119,34 +118,6 @@ export function parseAgentDefinition(filePath: string, contents: string, source:
 		throw new DefinitionError(`${filePath}: "tools" is required and must be a non-empty array of tool names`);
 	}
 
-	let model: string[] | undefined;
-	const rawModel = fields.model;
-	if (rawModel !== undefined) {
-		if (typeof rawModel === "string") {
-			if (rawModel.trim()) model = [rawModel.trim()];
-		} else if (Array.isArray(rawModel)) {
-			if (rawModel.length === 0) {
-				throw new DefinitionError(`${filePath}: "model" list must not be empty`);
-			}
-			model = rawModel;
-		}
-		if (!model || model.some((m) => !m.trim())) {
-			throw new DefinitionError(`${filePath}: "model" must be a model string or a non-empty list of model strings`);
-		}
-	}
-
-	let thinkingLevel: AgentThinkingLevel | undefined;
-	const rawThinking = fields.thinkingLevel;
-	if (rawThinking !== undefined) {
-		const value = typeof rawThinking === "string" ? rawThinking.trim().toLowerCase() : "";
-		if (!THINKING_LEVELS.includes(value as AgentThinkingLevel)) {
-			throw new DefinitionError(
-				`${filePath}: "thinkingLevel" must be one of: ${THINKING_LEVELS.join(" | ")} (got "${rawThinking}")`,
-			);
-		}
-		thinkingLevel = value as AgentThinkingLevel;
-	}
-
 	let skills = true; // default on (spec §R2.2)
 	const rawSkills = fields.skills;
 	if (rawSkills !== undefined) {
@@ -159,7 +130,7 @@ export function parseAgentDefinition(filePath: string, contents: string, source:
 	const systemPrompt = split.body.trim();
 	if (!systemPrompt) throw new DefinitionError(`${filePath}: definition body (system prompt) is empty`);
 	const description = typeof fields.description === "string" ? fields.description.trim() : "";
-	return { name, description, tools, model, thinkingLevel, skills, systemPrompt, warnings, filePath, source };
+	return { name, description, tools, skills, systemPrompt, warnings, filePath, source };
 }
 
 export interface DiscoveryDirs {

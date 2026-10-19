@@ -50,12 +50,10 @@ non-interactive child agent sessions (**subagents**) via a general subagent-spaw
    - `name` — spawn identifier (unique)
    - `description` — when to use it; feeds the subagent tool description so the orchestrator picks correctly
    - `tools` — **required** tool allowlist (array of tool names; see §R5)
-   - `model` — ordered fallback list (see §R4); an entry may pin its thinking level via the
-     `provider/model-id@level` suffix (e.g. `github-copilot/gpt-5.6-terra@max`) — unpinned entries
-     use the agent's `thinkingLevel` default
-   - `thinkingLevel` — default thinking level for unpinned chain entries (and the parent fallback);
-     one of the platform levels; platform clamps to model capabilities
    - `skills` — `on` / `off`, **default `on`** (see §R10)
+   - Model selection is **not** a definition field: `model` and `thinkingLevel` live in the model
+     config file (§R13). A definition carrying either gets an unknown-field warning and the value
+     is ignored.
 3. The markdown body is the agent's system prompt, applied via `systemPromptOverride` in `DefaultResourceLoader`.
 4. **Bundled definitions** ship inside the extension: `worker`, `scout`, and `researcher` (§R3).
 5. **User-level override:** a file in `~/.pi/agent/agents/*.md` whose `name` matches a bundled name **replaces** it.
@@ -73,9 +71,8 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 - `tools: [read, grep, find, ls]` — truly read-only, **no bash**.
 - Git history arrives by injection, not from bash (§R12): `git_history` and `git_show` are leaf capability tools
   appended to the child's tool list at session creation, so the `tools` line above stays the allowlist.
-- `skills: on`; `thinkingLevel: low` (default for the parent fallback entry). Model chain (user-tuned):
-  local `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` (llama-server, free) →
-  `github-copilot/gpt-5.6-luna@xhigh` → the orchestrator's model.
+- `skills: on`. No model chain in the definition: model selection comes from the config file
+  (§R13); without one, the scout runs on the orchestrator's model.
 - Report shape (fresh design, enforced by its prompt): Files Retrieved (exact `path:lines`) · Key Code (verbatim,
   within size budget) · Architecture (how pieces connect) · Start Here (which file first and why).
 - **Zero re-exploration quality bar**: a worker consuming a scout report must never need to re-read the same files —
@@ -85,9 +82,8 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
 - `tools: [read, bash, edit, write, grep, find, ls]` — full write access. No injected tools: a worker cannot
   spawn subagents and does its own reconnaissance.
 - `skills: on` (see §R10 for leverage behavior).
-- Model chain (user-tuned):
-  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@max` →
-  the orchestrator's model (`thinkingLevel: medium` covers the parent fallback entry).
+- No model chain in the definition: model selection comes from the config file (§R13); without
+  one, the worker runs on the orchestrator's model.
 - Report shape (fresh design): what was done, files changed (paths + what), notes for the orchestrator.
 
 **`researcher`** — live-web research; returns a compressed, source-cited report.
@@ -99,10 +95,9 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
   typed parameters, extra flags ride in an `options` string array of individual argv tokens, so a researcher cannot
   run arbitrary commands. Because these names never appear in the frontmatter `tools` list, §R5.2's unknown-name
   validation is untouched.
-- `skills: on` (the firecrawl skills document the exact flags, carried in `options`); `thinkingLevel: medium`
-  (default for the parent fallback entry). Model chain (user-tuned, same as scout):
-  `local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium` → `github-copilot/gpt-5.6-luna@xhigh` →
-  the orchestrator's model.
+- `skills: on` (the firecrawl skills document the exact flags, carried in `options`).
+- No model chain in the definition: model selection comes from the config file (§R13); without
+  one, the researcher runs on the orchestrator's model.
 - Report shape: Summary · Findings · Sources (URL + saved file path) · Gaps. **Zero re-fetch quality bar**: every
   claim carries a source URL.
 
@@ -111,7 +106,7 @@ extension-appended** (never child-authored), and — for worker — carry the **
 
 ### R4 — Model fallback (from #16)
 
-An agent definition's `model` is an **ordered list**. Resolution pipeline:
+An agent's model list (from the config file, §R13) is an **ordered list**. Resolution pipeline:
 
 1. **At spawn:** entries without valid auth are skipped (`modelRuntime.getAvailable()` pre-check); the child starts
    on the first usable model.
@@ -128,8 +123,8 @@ An agent definition's `model` is an **ordered list**. Resolution pipeline:
    diagnostics (what was tried, why each failed).
 4. **Per-spawn `model` override replaces the list entirely** — the override is definitive; no fallback net applies
    (no parent append either).
-5. **Per-entry thinking pins:** an entry's `@level` wins over the definition's `thinkingLevel`; a per-spawn
-   `thinkingLevel` param wins over both and rides the whole chain. Precedence: per-spawn > entry pin > definition.
+5. **Per-entry thinking pins:** an entry's `@level` wins over the orchestrator's current thinking level; a per-spawn
+   `thinkingLevel` param wins over both and rides the whole chain. Precedence: per-spawn > entry pin > orchestrator level.
 
 ### R5 — Tool scope & security (from #16)
 
@@ -313,6 +308,30 @@ this replaces `git log -p` in the child's context, it is not a git wrapper.
 8. **Implementation status:** shipped — `git-history.ts` (pure argv builders, log parser/formatter, injectable
    runner over the shared `cli.ts` seam) wired through `SubagentDeps.scoutTools`, with unit coverage that stubs
    the runner and needs neither a repository nor a real git binary.
+
+### R13 — Model config file (amendment, no ticket)
+
+Per-agent model selection lives in a JSON config file, not in agent definitions:
+
+1. **Location:** `~/.pi/agent/subagents.json`. Absent by default — with no file (and no
+   per-spawn override) the subagent runs on the orchestrator's current model.
+2. **Schema:** a JSON object mapping agent name → ordered list of `provider/model-id[@level]`
+   strings. No other keys; no `default` entry; no `thinkingLevel` (unpinned entries ride the
+   orchestrator's current thinking level). Example:
+   ```json
+   { "worker": ["github-copilot/gpt-5.6-terra@max"], "scout": ["local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium"] }
+   ```
+3. **Precedence:** per-spawn `model` tool override (definitive, §R4.4) > config file list > the
+   orchestrator's current model. A config list resolves through the same §R4 pipeline — auth
+   pre-check, runtime fallback down the list, parent model appended as the terminal entry (deduped).
+4. **Scope:** keyed by agent name; applies to bundled and user-replaced definitions alike. Entries
+   for names with no definition are inert.
+5. **Freshness:** read on every spawn; mid-session edits take effect immediately.
+6. **Failure posture:** missing file → silent fallback. Invalid JSON, a non-object top level, or a
+   wrong-typed entry → a spawn diagnostic warning; the bad entry (or whole file) is skipped and
+   resolution continues at the next precedence level. The config never fails a spawn.
+7. **Frontmatter:** `model` and `thinkingLevel` are no longer definition fields (§R2.2); a
+   definition carrying either gets an unknown-field warning and the value is ignored.
 
 ## 4. Implementation plan
 

@@ -7,7 +7,8 @@
 //   - tools                      → the definition's allowlist; unknown names fail the spawn fast
 //   - cwd                        → inherited from the orchestrator, not a per-spawn override
 //   - thinkingLevel              → per-spawn override ?? per-entry "ref@level" pin ?? the
-//                                  definition's level; the platform clamps to model capabilities
+//                                  orchestrator's current thinking level; the platform clamps
+//                                  to model capabilities
 //   - skills                     → definition-controlled (skills: off → noSkills); context files stay ON (§R1.4)
 
 import {
@@ -110,8 +111,11 @@ export interface SpawnRunOptions {
 	modelChain?: readonly (ChainEntry | undefined)[];
 	/** Skip notes from chain resolution (unauthed/uncatalogued entries). */
 	modelDiagnostics?: string[];
-	/** Requested thinking level (per-spawn override ?? definition); the platform clamps per model. */
+	/** Requested thinking level (per-spawn override); the platform clamps per model. */
 	thinkingLevel?: AgentThinkingLevel;
+	/** The orchestrator's current thinking level; rides unpinned chain entries (no definition
+	 *  level exists anymore — model/thinkingLevel moved to the config file). */
+	parentThinkingLevel?: AgentThinkingLevel;
 	signal?: AbortSignal;
 	/** Live child activity relay into the tool call's rendering via onUpdate. */
 	onActivity?: (activity: SubagentActivity) => void;
@@ -199,8 +203,8 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 		const entry = chain[attempt];
 		const model = entry?.model;
 		// Per-attempt requested level: per-spawn override wins over the entry's "@level"
-		// pin, which wins over the definition's default (spec §R2.2).
-		const thinkingLevel = options.thinkingLevel ?? entry?.thinkingLevel ?? definition.thinkingLevel;
+		// pin, which wins over the orchestrator's current level.
+		const thinkingLevel = options.thinkingLevel ?? entry?.thinkingLevel ?? options.parentThinkingLevel;
 		let result = await runOnce({ options, agentDir, loader, model, thinkingLevel });
 		for (const d of result.diagnostics) {
 			if (!diagnostics.includes(d)) diagnostics.push(d); // retry attempts repeat footer warnings; keep once

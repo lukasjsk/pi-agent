@@ -67,8 +67,6 @@ test("parseAgentDefinition builds the definition", () => {
 			name: "scout",
 			description: "explores",
 			tools: ["read", "grep"],
-			model: undefined,
-			thinkingLevel: undefined,
 			skills: true,
 			systemPrompt: "Do recon.",
 			warnings: [],
@@ -78,24 +76,16 @@ test("parseAgentDefinition builds the definition", () => {
 	);
 });
 
-test("model parses as a single string or a list; empty list fails", () => {
-	const single = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: anthropic/claude-sonnet-4-5\n---\nP", "user");
-	assert.deepEqual(single.model, ["anthropic/claude-sonnet-4-5"]);
-	const list = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: [a/x, b/y]\n---\nP", "user");
-	assert.deepEqual(list.model, ["a/x", "b/y"]);
-	assert.throws(
-		() => parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nmodel: []\n---\nP", "user"),
-		/list must not be empty/,
+test("model and thinkingLevel are no longer frontmatter fields — unknown-field warning, value ignored", () => {
+	const def = parseAgentDefinition(
+		"/x/a.md",
+		"---\nname: a\ntools: [read]\nmodel: anthropic/claude-sonnet-4-5\nthinkingLevel: high\n---\nP",
+		"user",
 	);
-});
-
-test("thinkingLevel validates against the platform levels", () => {
-	const def = parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nthinkingLevel: high\n---\nP", "user");
-	assert.equal(def.thinkingLevel, "high");
-	assert.throws(
-		() => parseAgentDefinition("/x/a.md", "---\nname: a\ntools: [read]\nthinkingLevel: extreme\n---\nP", "user"),
-		/thinkingLevel" must be one of/,
-	);
+	assert.deepEqual(def.warnings, [
+		'/x/a.md: unknown frontmatter field "model" ignored',
+		'/x/a.md: unknown frontmatter field "thinkingLevel" ignored',
+	]);
 });
 
 test("skills accepts on/off (and true/false), defaults to on", () => {

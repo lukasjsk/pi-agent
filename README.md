@@ -6,7 +6,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 
 | Path | Purpose |
 | --- | --- |
-| [`extensions/subagents/`](extensions/subagents) | A `subagent` tool that lets the orchestrator delegate work to isolated, ephemeral child sessions. Ships bundled `worker` (implementation), `scout` (read-only exploration, with injected `git_history`/`git_show` tools), and `researcher` (live-web research via injected `firecrawl_*` tools, no `bash`) agent definitions with model fallback, structured reports, a concurrency cap with queueing, and Esc cancellation. Children are leaves — no subagent tool is injected into any child. Users can override or add agent definitions in `~/.pi/agent/agents/*.md`. Spec: [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md). |
+| [`extensions/subagents/`](extensions/subagents) | A `subagent` tool that lets the orchestrator delegate work to isolated, ephemeral child sessions. Ships bundled `worker` (implementation), `scout` (read-only exploration, with injected `git_history`/`git_show` tools), and `researcher` (live-web research via injected `firecrawl_*` tools, no `bash`) agent definitions with per-agent model fallback configured in `~/.pi/agent/subagents.json`, structured reports, a concurrency cap with queueing, and Esc cancellation. Children are leaves — no subagent tool is injected into any child. Users can override or add agent definitions in `~/.pi/agent/agents/*.md`. Spec: [`SUBAGENTS_EXTENSION.md`](SUBAGENTS_EXTENSION.md). |
 | [`AGENTS.md`](AGENTS.md) | Project instructions for agents that work in this repository: prefer ASD-STE100 Simplified Technical English for agent-facing text, with the conditions that call for it and the cases where it does not apply. |
 | [`GLOSSARY.md`](GLOSSARY.md) | The domain language (ubiquitous-language glossary) for the subagents extension: orchestrator, subagent, worker, scout, researcher, and the other terms the extension's docs and source comments cite. Named for the convention the Matt Pocock skills read (`GLOSSARY.md`, or `GLOSSARY-MAP.md` in a multi-context repo). |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
@@ -49,6 +49,23 @@ done
 
 Restart Pi after installing or changing extensions. Select the theme with Pi's theme picker.
 
+### Per-agent model config (optional)
+
+By default, subagents run on the orchestrator's current model. To give agents their own model
+fallback chains, create `~/.pi/agent/subagents.json` mapping agent names to ordered model lists
+(`provider/model-id`, with an optional `@level` thinking-level pin):
+
+```json
+{
+  "worker": ["github-copilot/gpt-5.6-terra@max"],
+  "scout": ["local-qwen38/unsloth/Qwen3.8-27B-GGUF:Q4_K_M@medium", "github-copilot/gpt-5.6-luna@xhigh"]
+}
+```
+
+Unlisted agents keep the default. For listed agents, the orchestrator's model is always the
+final fallback. The file is re-read on every spawn; a malformed file or entry warns and is
+skipped, never failing a spawn. Spec: [SUBAGENTS_EXTENSION.md §R13](SUBAGENTS_EXTENSION.md#r13--model-config-file-amendment-no-ticket).
+
 To restore the pinned project skills (listed in `skills-lock.json`), run in the repository root:
 
 ```bash
@@ -89,7 +106,7 @@ ships the `subagent` tool with `worker`, `scout` (plus injected git-history tool
 ## Notes
 
 - Extensions are self-contained TypeScript but expect Pi's extension runtime packages; they are not standalone Node packages.
-- The subagents extension reads an optional concurrency setting from `~/.pi/agent/configs/subagents.json` (`maxConcurrent`, default 4); agent definitions override by matching `name` in `~/.pi/agent/agents/*.md`.
+- The subagents extension reads an optional concurrency setting from `~/.pi/agent/configs/subagents.json` (`maxConcurrent`, default 4); per-agent model fallback lists live in `~/.pi/agent/subagents.json`; agent definitions override by matching `name` in `~/.pi/agent/agents/*.md`.
 - Review agent prompts and extension code before installing them into a shared or untrusted environment.
 
 ## License

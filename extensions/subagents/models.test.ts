@@ -37,7 +37,7 @@ test("parseModelRef splits on the first slash and rejects malformed refs", () =>
 
 test("per-spawn override replaces the list entirely — even a fully unusable list is ignored (§R4.4)", () => {
 	const resolved = resolveModelChain({
-		definitionModel: ["ghost/none"],
+		configModel: ["ghost/none"],
 		overrideModel: "a/override",
 		registry: registry([{ provider: "a", id: "override" }]), // "ghost/none" not in catalogue
 	});
@@ -56,7 +56,7 @@ test("an override not in the registry is a spawn error", () => {
 
 test("the first list entry with valid auth wins; unusable entries are skipped with diagnostics (§R4.1)", () => {
 	const resolved = resolveModelChain({
-		definitionModel: ["ghost/none", "a/unauthed", "b/ok"],
+		configModel: ["ghost/none", "a/unauthed", "b/ok"],
 		registry: registry(
 			[{ provider: "a", id: "unauthed" }, { provider: "b", id: "ok" }],
 			[{ provider: "b", id: "ok" }], // a/unauthed is registered but has no valid auth
@@ -73,7 +73,7 @@ test("a fully exhausted list is a ModelResolutionError carrying per-candidate in
 	assert.throws(
 		() =>
 			resolveModelChain({
-				definitionModel: ["ghost/none", "a/unauthed"],
+				configModel: ["ghost/none", "a/unauthed"],
 				registry: registry([{ provider: "a", id: "unauthed" }], []),
 			}),
 		(error: unknown) => {
@@ -87,14 +87,14 @@ test("a fully exhausted list is a ModelResolutionError carrying per-candidate in
 
 test("a malformed list entry fails the spawn fast (consistent with unknown tools)", () => {
 	assert.throws(
-		() => resolveModelChain({ definitionModel: ["not-a-ref"], registry: registry([]) }),
+		() => resolveModelChain({ configModel: ["not-a-ref"], registry: registry([]) }),
 		/not a "provider\/model-id" reference/,
 	);
 });
 
 test("a list without a registry cannot be resolved — no silent parent fallback (§R4.3)", () => {
 	assert.throws(
-		() => resolveModelChain({ definitionModel: ["a/one"] }),
+		() => resolveModelChain({ configModel: ["a/one"] }),
 		/no model registry available/,
 	);
 });
@@ -102,7 +102,7 @@ test("a list without a registry cannot be resolved — no silent parent fallback
 test("chain entries are the registry's full model objects, not parsed {provider,id} stubs", () => {
 	const fullModel = { provider: "b", id: "ok", reasoning: true, api: "openai-responses" };
 	const resolved = resolveModelChain({
-		definitionModel: ["b/ok"],
+		configModel: ["b/ok"],
 		registry: {
 			find: () => fullModel,
 			getAvailable: () => [fullModel],
@@ -143,7 +143,7 @@ test("parseModelEntry rejects an unknown thinking level", () => {
 test("the parent's model is appended as the final chain entry, deduped by ref id", () => {
 	const parent = { provider: "p", id: "parent" };
 	const resolved = resolveModelChain({
-		definitionModel: ["b/ok", "p/parent"],
+		configModel: ["b/ok", "p/parent"],
 		registry: registry([{ provider: "b", id: "ok" }, parent]),
 		parentModel: parent,
 	});
@@ -153,7 +153,7 @@ test("the parent's model is appended as the final chain entry, deduped by ref id
 test("a fully exhausted list lands on the parent's model instead of failing", () => {
 	const parent = { provider: "p", id: "parent" };
 	const resolved = resolveModelChain({
-		definitionModel: ["ghost/none", "a/unauthed"],
+		configModel: ["ghost/none", "a/unauthed"],
 		registry: registry([{ provider: "a", id: "unauthed" }], []),
 		parentModel: parent,
 	});
@@ -163,7 +163,7 @@ test("a fully exhausted list lands on the parent's model instead of failing", ()
 
 test("per-entry thinking pins survive resolution; unpinned entries stay unpinned", () => {
 	const resolved = resolveModelChain({
-		definitionModel: ["a/local@medium", "b/terra"],
+		configModel: ["a/local@medium", "b/terra"],
 		registry: registry([{ provider: "a", id: "local" }, { provider: "b", id: "terra" }]),
 	});
 	assert.deepEqual(resolved.chain.map((e) => e.thinkingLevel), ["medium", undefined]);

@@ -132,7 +132,7 @@ test("provenance records requested vs effective thinking level, extension-collec
 		return { session: fakeSession({ thinkingLevel: "off" }) }; // clamped: model cannot think
 	};
 
-	const result = await runSubagent({ ...baseOptions, definition: { ...scout, thinkingLevel: "high" } });
+	const result = await runSubagent({ ...baseOptions, parentThinkingLevel: "high" });
 
 	assert.equal(result.requestedThinkingLevel, "high");
 	assert.equal(result.effectiveThinkingLevel, "off");
@@ -357,17 +357,17 @@ test("a per-spawn thinkingLevel override rides the run and provenance", async ()
 	assert.equal(result.requestedThinkingLevel, "high");
 });
 
-test("passes the definition's thinkingLevel to the child session", async () => {
+test("passes the orchestrator's thinking level to the child session", async () => {
 	const captured: Array<Record<string, unknown>> = [];
 	platformHooks.createAgentSession = async (options) => {
 		captured.push(options);
 		return { session: fakeSession() };
 	};
-	await runSubagent({ ...baseOptions, definition: { ...scout, thinkingLevel: "high" } });
+	await runSubagent({ ...baseOptions, parentThinkingLevel: "high" });
 	assert.equal(lastCaptured(captured).thinkingLevel, "high");
 });
 
-test("a per-entry \"ref@level\" pin wins over the definition level; a per-spawn override wins over both", async () => {
+test("a per-entry \"ref@level\" pin wins over the parent level; a per-spawn override wins over both", async () => {
 	const captured: Array<Record<string, unknown>> = [];
 	platformHooks.createAgentSession = async (options) => {
 		captured.push(options);
@@ -381,7 +381,7 @@ test("a per-entry \"ref@level\" pin wins over the definition level; a per-spawn 
 	// Pinned first entry rides its pin; provenance reports the pinned request.
 	const result = await runSubagent({
 		...baseOptions,
-		definition: { ...scout, thinkingLevel: "low" },
+		parentThinkingLevel: "low",
 		modelChain: [{ model: { provider: "a", id: "pinned" }, thinkingLevel: "medium" }],
 	});
 	assert.equal(captured[0].thinkingLevel, "medium");
@@ -390,7 +390,7 @@ test("a per-entry \"ref@level\" pin wins over the definition level; a per-spawn 
 	// A per-spawn override beats the pin.
 	const override = await runSubagent({
 		...baseOptions,
-		definition: { ...scout, thinkingLevel: "low" },
+		parentThinkingLevel: "low",
 		modelChain: [{ model: { provider: "a", id: "pinned" }, thinkingLevel: "medium" }],
 		thinkingLevel: "max",
 	});

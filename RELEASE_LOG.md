@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-10-19
+
+### Changed
+
+- Subagent model selection moved from the agent definitions' frontmatter to `~/.pi/agent/subagents.json`, a JSON file mapping agent names to ordered model fallback lists (`provider/model-id`, optional `@level` pin). The reason: the model chains were user tuning, not part of an agent's role, so they do not belong in the definition files — with the config file the default becomes "reuse the main session's model" (no file needed), and unpinned chain entries ride the orchestrator's current thinking level instead of a per-definition default. `model` and `thinkingLevel` are no longer frontmatter fields (a definition carrying either gets an unknown-field warning and the value is ignored). The config file is re-read on every spawn; a malformed file or entry warns and is skipped, never failing a spawn. Spec §R13, the README install section, and the glossary are updated.
+
 ## 2026-10-18
 
 ### Added

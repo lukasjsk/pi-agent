@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Buffer } from "node:buffer";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { fakeSession, installPlatformMock, platformHooks, textDelta, toolStart } from "./pi-mock.ts";
@@ -185,18 +187,17 @@ test("a per-spawn model override reaches the child session (§R4.4)", async () =
 	assert.deepEqual(lastCaptured(captured).model, { provider: "custom", id: "override-model" });
 });
 
-test("a definition fallback list resolves through the registry with skip diagnostics in the result", async () => {
+test("a config-file fallback list resolves through the registry with skip diagnostics in the result", async () => {
 	const captured: Array<Record<string, unknown>> = [];
 	platformHooks.createAgentSession = async (options) => {
 		captured.push(options);
 		return { session: fakeSession({ messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] }) };
 	};
+	const agentDir = mkdtempSync(join(tmpdir(), "subagents-config-"));
+	writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ scout: ["ghost/none", "b/usable"] }));
 	const registryDeps = {
 		...deps,
-		resolveAgent: (name: string) => ({
-			...scout,
-			model: ["ghost/none", "b/usable"],
-		}) as typeof scout,
+		agentDir,
 		getModelRegistry: () => ({
 			find: (provider: string, id: string) => (provider === "b" ? { provider, id } : undefined),
 			getAvailable: () => [{ provider: "b", id: "usable" }],
@@ -208,6 +209,48 @@ test("a definition fallback list resolves through the registry with skip diagnos
 
 	assert.deepEqual(lastCaptured(captured).model, { provider: "b", id: "usable" });
 	assert.match(result.content[0].text, /skipped ghost\/none \(not in the model catalogue\)/);
+});
+
+test("a malformed config file warns and falls back to the parent's model", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession({ messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] }) };
+	};
+	const agentDir = mkdtempSync(join(tmpdir(), "subagents-config-"));
+	writeFileSync(join(agentDir, "subagents.json"), "{not json");
+	const parentDeps = {
+		...deps,
+		agentDir,
+		getModel: () => ({ provider: "p", id: "parent" }),
+	};
+
+	const execute = createSubagentExecutor(parentDeps);
+	const result = await execute({ agent: "scout", task: "x" }, undefined, undefined);
+
+	assert.deepEqual(lastCaptured(captured).model, { provider: "p", id: "parent" });
+	assert.match(result.content[0].text, /invalid JSON ignored/);
+});
+
+test("a wrong-typed config entry warns and falls back to the parent's model", async () => {
+	const captured: Array<Record<string, unknown>> = [];
+	platformHooks.createAgentSession = async (options) => {
+		captured.push(options);
+		return { session: fakeSession({ messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] }) };
+	};
+	const agentDir = mkdtempSync(join(tmpdir(), "subagents-config-"));
+	writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ scout: "not-a-list" }));
+	const parentDeps = {
+		...deps,
+		agentDir,
+		getModel: () => ({ provider: "p", id: "parent" }),
+	};
+
+	const execute = createSubagentExecutor(parentDeps);
+	const result = await execute({ agent: "scout", task: "x" }, undefined, undefined);
+
+	assert.deepEqual(lastCaptured(captured).model, { provider: "p", id: "parent" });
+	assert.match(result.content[0].text, /entry for "scout" must be a non-empty list/);
 });
 
 test("an override that the registry does not know is a spawn error", async () => {

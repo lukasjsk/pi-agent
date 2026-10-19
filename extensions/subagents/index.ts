@@ -16,7 +16,8 @@ import {
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery } from "./definitions.ts";
+import { discoverAgents, resolveAgent, THINKING_LEVELS, type AgentDefinition, type AgentDiscovery, type AgentThinkingLevel } from "./definitions.ts";
+import { loadAgentModelConfig } from "./config.ts";
 import { createFirecrawlTools } from "./firecrawl.ts";
 import { createGitTools } from "./git-history.ts";
 import { runSubagent, type ChildUsage, type SubagentActivity, type SubagentResult, type SubagentToolCallSummary } from "./spawn.ts";
@@ -39,7 +40,7 @@ const modelParam = Type.Optional(
 	Type.String({
 		description:
 			'Leave unset unless the user explicitly requests a specific model. When set, a "provider/model-id" ' +
-			'(e.g. "github-copilot/gpt-5.6-terra") replaces the agent\'s configured model fallback list entirely.',
+			'(e.g. "github-copilot/gpt-5.6-terra") replaces the agent\'s model fallback list (config file or parent model) entirely.',
 	}),
 );
 const thinkingLevelParam = Type.Optional(
@@ -77,6 +78,7 @@ export interface SubagentDeps {
 	resolveAgent: (name: string) => AgentDefinition;
 	getModel: () => unknown; // parent's current model (platform Model); undefined in tests
 	getModelRegistry: () => ModelRegistryLike | undefined; // ctx.modelRegistry; undefined in tests
+	getParentThinkingLevel: () => AgentThinkingLevel | undefined; // ctx.thinkingLevel; undefined in tests
 	cwd: string;
 	agentDir: string;
 	/** Root for §R8 overflow files (defaults to the OS temp dir). */
@@ -165,18 +167,22 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 			);
 		}
 
+		// Model config (~/.pi/agent/subagents.json): read fresh on every spawn, so edits take
+		// effect immediately. Absent file → pure fallback; malformed file/entries warn and skip.
+		const config = loadAgentModelConfig(`${deps.agentDir}/subagents.json`);
+
 		// Model fallback pipeline (§R4): resolve the ordered chain before spawning.
 		let modelChain;
 		let modelDiagnostics: string[] = [];
 		try {
 			const resolved = resolveModelChain({
-				definitionModel: definition.model,
+				configModel: config.models[definition.name],
 				overrideModel,
 				parentModel: deps.getModel(),
 				registry: deps.getModelRegistry(),
 			});
 			modelChain = resolved.chain;
-			modelDiagnostics = resolved.diagnostics;
+			modelDiagnostics = [...config.warnings, ...resolved.diagnostics];
 		} catch (error) {
 			throw new Error(error instanceof Error ? error.message : String(error));
 		}
@@ -198,6 +204,7 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 					modelChain,
 					modelDiagnostics,
 					thinkingLevel: thinkingOverride as never,
+					parentThinkingLevel: deps.getParentThinkingLevel?.(),
 					childTools,
 					signal,
 					onActivity: onUpdate
@@ -296,6 +303,7 @@ function makeDeps(ctx: ExtensionContext): SubagentDeps {
 		resolveAgent: (name) => resolveAgent(discoverAgents(discoveryDirs()), name),
 		getModel: () => ctx.model,
 		getModelRegistry: () => ctx.modelRegistry as ModelRegistryLike | undefined,
+		getParentThinkingLevel: () => ctx.thinkingLevel as AgentThinkingLevel | undefined,
 		cwd: ctx.cwd,
 		agentDir: getAgentDir(),
 		overflowRoot: tmpdir(),
