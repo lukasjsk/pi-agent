@@ -31,7 +31,8 @@ import { detectHerdr, HerdrPaneControl, type HerdrEnv } from "./pane/herdr.ts";
 import { SubagentPaneManager, type PaneRelay } from "./pane/manager.ts";
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 const taskParam = Type.String({
 	description:
@@ -316,6 +317,20 @@ function paneViewerPath(): string {
 	return `${dirname(fileURLToPath(import.meta.url))}/pane/viewer.ts`;
 }
 
+/** The JS runtime for the pane viewer: prefer bun. The viewer chain mixes `.ts`
+ *  and `.js` import specifiers (the footer segments use the `.js` convention);
+ *  bun resolves both, but node's native TS type stripping does not rewrite
+ *  `.js` to `.ts` and crashes on them. Falls back to the current runtime when
+ *  bun is not on PATH. */
+function paneViewerRuntime(): string {
+	if (process.platform !== "win32") {
+		const found = spawnSync("which", ["bun"], { encoding: "utf8" });
+		const bin = (found.stdout ?? "").trim().split("\n")[0];
+		if (found.status === 0 && bin && existsSync(bin)) return bin;
+	}
+	return process.execPath;
+}
+
 /**
  * The per-session pane manager (ADR 0001): present only when the orchestrator runs
  * inside Herdr. The pane is a display-only mirror, so the manager's failures are
@@ -333,7 +348,7 @@ export function paneManagerFor(
 		cwd: ctx.cwd,
 		sessionId: ctx.getSessionId?.(),
 		socketRoot: tmpdir(),
-		viewerCommand: (sockPath) => `${process.execPath} "${paneViewerPath()}" --socket "${sockPath}"`,
+		viewerCommand: (sockPath) => `"${paneViewerRuntime()}" "${paneViewerPath()}" --socket "${sockPath}"`,
 		log: (message) => process.stderr.write(`[subagents] ${message}\n`),
 	});
 }

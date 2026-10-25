@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-10-25
+
+### Fixed
+
+- The Herdr subagent pane viewer starts with bun when bun is on PATH, falling back to the orchestrator's own runtime otherwise. The viewer's import chain mixes bun-style `.ts` specifiers (`pane/frame.ts` imports the footer segments by `.ts` path) with the TypeScript `.js` convention (the footer segments import their own modules by `.js` path); bun resolves both, but node's native TS type stripping does not rewrite `.js` to `.ts`, so the viewer process crashed at import with `ERR_MODULE_NOT_FOUND` and every pane stayed viewerless while the runs themselves finished. `paneViewerRuntime()` in `extensions/subagents/index.ts` resolves bun via `which` and quotes the binary in the viewer command line.
+
 ## 2026-10-26
 
 ### Added
