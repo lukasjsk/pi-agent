@@ -773,6 +773,144 @@ test("renderCall is the static role · task-excerpt header plus the frame's top 
 	assert.equal(rendered[1], 'scout · "Recon the repo."');
 });
 
+// ---- ADR 0001: the spawn's pane is a display-only mirror ----
+
+function fakePane() {
+	const opens: Array<{ agent: string; spawnId: string; task?: string }> = [];
+	const relays: Array<Record<string, unknown>> = [];
+	const settles: Array<Record<string, unknown>> = [];
+	const pane = {
+		open: (agent: string, spawnId: string, task?: string) => {
+			opens.push({ agent, spawnId, task });
+			return {
+				spawnId,
+				relay: (activity: unknown) => relays.push(activity as Record<string, unknown>),
+				settle: (payload: unknown) => settles.push(payload as Record<string, unknown>),
+				stop: () => undefined,
+			};
+		},
+	};
+	return { pane, opens, relays, settles };
+}
+
+test("a spawn opens its pane, relays the same activity, and settles the pane with the run (ADR 0001)", async () => {
+	const { pane, opens, relays, settles } = fakePane();
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+		});
+		session.prompt = async () => {
+			toolStart(session, "read");
+			textDelta(session, "working");
+		};
+		return { session };
+	};
+
+	const execute = createSubagentExecutor({ ...deps, pane });
+	const result = await execute({ agent: "scout", task: "Recon the repo." }, undefined, undefined);
+
+	assert.equal(opens.length, 1, "one pane per spawn");
+	assert.equal(opens[0].agent, "scout");
+	assert.match(opens[0].spawnId, /^scout-[0-9a-f]{8}$/);
+	assert.equal(opens[0].task, "Recon the repo.");
+	assert.ok(relays.length >= 1, "live activity is relayed into the pane");
+	assert.match(String(relays[0].progress), /tools: read/);
+	assert.ok(Array.isArray(relays[relays.length - 1].toolCalls), "the relayed activity keeps its structured shape");
+	assert.equal(settles.length, 1, "the pane settles exactly once");
+	assert.equal(settles[0].status, result.details.status);
+	assert.equal(settles[0].report, "done");
+	assert.ok(Array.isArray(settles[0].diagnostics));
+	assert.equal(result.details.status, "completed");
+});
+
+test("a failing pane never fails the spawn (ADR 0001: the pane is best-effort)", async () => {
+	const boom = (): never => {
+		throw new Error("herdr exploded");
+	};
+	const pane = {
+		open: () => ({
+			spawnId: "scout-x",
+			relay: () => boom(),
+			settle: () => boom(),
+			stop: () => undefined,
+		}),
+	};
+	platformHooks.createAgentSession = async () => {
+		const session = fakeSession({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+		});
+		session.prompt = async () => {
+			toolStart(session, "read");
+			textDelta(session, "working");
+		};
+		return { session };
+	};
+
+	const execute = createSubagentExecutor({ ...deps, pane });
+	const result = await execute({ agent: "scout", task: "Recon." }, undefined, undefined);
+
+	assert.equal(result.details.status, "completed", "the run is the single source of truth");
+});
+
+test("a spawn error after the pane opened settles the pane failed: no leaked pane (ADR 0001)", async () => {
+	const brokenAgent = parseAgentDefinition(
+		"/x/broken.md",
+		"---\nname: broken\ndescription: broken\ntools: [read, bogus-tool]\n---\nBody.",
+		"bundled",
+	);
+	const { pane, opens, settles } = fakePane();
+	const execute = createSubagentExecutor({
+		...deps,
+		resolveAgent: (name: string) => {
+			if (name === "broken") return brokenAgent;
+			if (name === "scout") return scout;
+			throw new UnknownAgentError(`Unknown agent "${name}". Valid agents: scout, broken`);
+		},
+		pane,
+	});
+
+	// Unknown tool name: the spawn throws before any session is created, after the pane opened.
+	await assert.rejects(execute({ agent: "broken", task: "Recon." }, undefined, undefined), /bogus-tool/);
+
+	assert.equal(opens.length, 1, "the pane opened before the run failed");
+	assert.equal(settles.length, 1, "the pane was settled so its backstop close runs");
+	assert.equal(settles[0].status, "failed");
+	assert.match(String((settles[0] as { diagnostics: unknown[] }).diagnostics[0]), /bogus-tool/);
+});
+
+test("queued-Esc never opens a pane: nothing ran, nothing to mirror (ADR 0001)", async () => {
+	const { releases, hook } = gatedPromptHook();
+	platformHooks.createAgentSession = hook;
+	const { pane, opens } = fakePane();
+	const execute = createSubagentExecutor({ ...deps, pane, scheduler: new SpawnScheduler(1) });
+
+	const controller = new AbortController();
+	const running = execute({ agent: "scout", task: "Running." }, undefined, undefined); // takes the single slot
+	const queued = execute({ agent: "scout", task: "Queued." }, controller.signal, undefined); // waits behind it
+	await new Promise((r) => setTimeout(r, 0));
+	controller.abort();
+	const queuedResult = await queued;
+	assert.equal(queuedResult.details.status, "cancelled");
+	assert.equal(opens.length, 1, "only the run that actually started got a pane");
+	assert.equal(opens[0].task, "Running.");
+	releases[0]();
+	await running;
+});
+
+test("paneManagerFor is absent outside Herdr and present inside it (ADR 0001 detection)", async () => {
+	const { paneManagerFor } = await import("./index.ts");
+	assert.equal(paneManagerFor({}, { cwd: "/repo" }), undefined, "no Herdr env → no panes");
+	assert.equal(
+		paneManagerFor({ HERDR_PANE_ID: "w1:p1" }, { cwd: "/repo" }),
+		undefined,
+		"a pane id without the Herdr env flag → no panes",
+	);
+	const manager = paneManagerFor({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_BIN_PATH: "/bin/herdr" }, { cwd: "/repo" });
+	assert.ok(manager, "Herdr detected → a pane manager exists");
+	assert.equal(typeof manager!.open, "function");
+	assert.equal(typeof manager!.closeAll, "function");
+});
+
 test("failed and cancelled statuses render with distinct markers and diagnostics", () => {
 	const failed = renderSubagentResult(
 		{ details: { ...settledDetails, status: "failed", report: "" } },

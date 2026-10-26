@@ -27,6 +27,8 @@ import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from 
 import { DEFAULT_MAX_CONCURRENT, parseMaxConcurrent, SpawnScheduler } from "./concurrency.ts";
 import { EMPTY_FOOTER } from "./report.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
+import { detectHerdr, HerdrPaneControl, type HerdrEnv } from "./pane/herdr.ts";
+import { SubagentPaneManager, type PaneRelay } from "./pane/manager.ts";
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -93,6 +95,11 @@ export interface SubagentDeps {
 	/** Custom tools injected into scout child sessions: the git-history tools (§R12). Absent in
 	 *  tests unless wired explicitly. */
 	scoutTools?: () => ToolDefinition[];
+	/** The subagent pane mirror (ADR 0001): opens one display-only Herdr pane per spawn.
+	 *  Present only when the orchestrator runs inside Herdr; absent in tests unless wired. */
+	pane?: {
+		open(agent: string, spawnId: string, task?: string): PaneRelay | undefined;
+	};
 }
 
 /** The researcher role name — the only definition whose children receive the firecrawl web-research tools. */
@@ -194,10 +201,29 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 		if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
 		else if (definition.name === SCOUT_AGENT_NAME) childTools = deps.scoutTools?.();
 
+		// ADR 0001: inside Herdr the spawn's pane is a display-only mirror of these very
+		// events. It opens when the run starts (never while queued), and every call is
+		// guarded: a pane failure can never fail or delay the spawn.
+		const spawnId = newSpawnId(definition.name);
+		let paneRelay: PaneRelay | undefined;
+		const pane = (fn: () => void): void => {
+			try {
+				fn();
+			} catch {
+				// The pane is best-effort (ADR 0001); the run is the single source of truth.
+			}
+		};
+
 		const result = await deps.scheduler.run(
-			() =>
-				runSubagent({
-					definition,
+			async () => {
+				pane(() => {
+					paneRelay = deps.pane?.open(definition.name, spawnId, params.task);
+				});
+				try {
+					// await: runSubagent is async — its rejections must reach this catch so
+					// the pane settles (a bare `return` would bypass it).
+					return await runSubagent({
+						definition,
 					task: params.task,
 					cwd: deps.cwd,
 					agentDir: deps.agentDir,
@@ -206,15 +232,28 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 					thinkingLevel: thinkingOverride as never,
 					parentThinkingLevel: deps.getParentThinkingLevel?.(),
 					childTools,
-					signal,
-					onActivity: onUpdate
-						? (activity: SubagentActivity) =>
+						signal,
+						onActivity: (activity: SubagentActivity) => {
+							pane(() => paneRelay?.relay(activity));
+							if (onUpdate)
 								onUpdate({
 									content: [{ type: "text", text: `[${definition.name}] ${activity.progress}` }],
 									details: { status: "running", ...activity },
-								})
-						: undefined,
-				}),
+								});
+						},
+					});
+				} catch (error) {
+					// A spawn error after the pane opened would otherwise leak the pane open:
+					// settle it failed so the backstop close runs, then rethrow to the caller.
+					pane(() =>
+						paneRelay?.settle({
+							status: "failed",
+							diagnostics: [error instanceof Error ? error.message : String(error)],
+						}),
+					);
+					throw error;
+				}
+			},
 			signal,
 			// Esc while queued: nothing ran, so the partial report is empty. The entry
 			// still returns a well-formed cancelled result (§R9.2), never a thrown error.
@@ -233,6 +272,19 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 							details: { status: "running", progress: `queued — ${ahead} spawn(s) ahead` },
 						})
 				: undefined,
+		);
+
+		// ADR 0001: the pane settles with the run — the viewer shows the outcome, its
+		// countdown starts, and it closes the pane itself. Guarded like every pane call.
+		pane(() =>
+			paneRelay?.settle({
+				status: result.status,
+				modelUsed: result.modelUsed,
+				cost: result.usage?.cost.total,
+				totalTokens: result.usage?.totalTokens,
+				report: result.report,
+				diagnostics: result.diagnostics,
+			}),
 		);
 
 		// Result transport (§R8): the full payload always rides in details; an oversized
@@ -259,6 +311,33 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 	};
 }
 
+/** The bundled pane viewer entry, next to this module. */
+function paneViewerPath(): string {
+	return `${dirname(fileURLToPath(import.meta.url))}/pane/viewer.ts`;
+}
+
+/**
+ * The per-session pane manager (ADR 0001): present only when the orchestrator runs
+ * inside Herdr. The pane is a display-only mirror, so the manager's failures are
+ * logged to stderr and never reach the spawn path.
+ */
+export function paneManagerFor(
+	env: HerdrEnv,
+	ctx: { cwd: string; getSessionId?: () => string | undefined },
+): SubagentPaneManager | undefined {
+	const detection = detectHerdr(env);
+	if (!detection) return undefined;
+	return new SubagentPaneManager({
+		herdr: new HerdrPaneControl({ bin: detection.bin }),
+		mainPaneId: detection.mainPaneId,
+		cwd: ctx.cwd,
+		sessionId: ctx.getSessionId?.(),
+		socketRoot: tmpdir(),
+		viewerCommand: (sockPath) => `${process.execPath} "${paneViewerPath()}" --socket "${sockPath}"`,
+		log: (message) => process.stderr.write(`[subagents] ${message}\n`),
+	});
+}
+
 function toolDescription(discovery: AgentDiscovery): string {
 	const names = [...discovery.agents.keys()].sort();
 	if (names.length === 0) return "Delegate a task to a subagent. (No agent definitions found.)";
@@ -279,11 +358,19 @@ function toolDescription(discovery: AgentDiscovery): string {
 const SUBAGENT_RENDERERS = { renderCall: renderSubagentCall, renderResult: renderSubagentResult } as const;
 
 export default function (pi: ExtensionAPI) {
+	// ADR 0001: the session-scoped pane manager, torn down at session_shutdown.
+	let paneManager: SubagentPaneManager | undefined;
 	pi.on("session_start", (_event, ctx) => {
 		// Extension-wide cap (§R8.3): one scheduler per session, shared by every parallel
 		// subagent tool call. Config: ~/.pi/agent/configs/subagents.json.
 		const deps = makeDeps(ctx);
 		deps.scheduler = new SpawnScheduler(loadMaxConcurrent());
+		// ADR 0001: inside Herdr every spawn mirrors into a display-only subagent pane.
+		paneManager = paneManagerFor(process.env, {
+			cwd: ctx.cwd,
+			getSessionId: () => ctx.sessionManager?.getSessionId(),
+		});
+		deps.pane = paneManager;
 		const executor = createSubagentExecutor(deps);
 		pi.registerTool({
 			name: "subagent",
@@ -295,6 +382,10 @@ export default function (pi: ExtensionAPI) {
 			execute: (_toolCallId, params, signal, onUpdate) => executor(params, signal, onUpdate),
 			...SUBAGENT_RENDERERS,
 		});
+	});
+	pi.on("session_shutdown", () => {
+		paneManager?.closeAll();
+		paneManager = undefined;
 	});
 }
 

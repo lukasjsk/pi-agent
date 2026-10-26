@@ -48,6 +48,9 @@ export interface SubagentActivity {
 	effectiveThinkingLevel?: string;
 	/** Running token totals (assistant messages so far); display-only (§R11.5). */
 	tokens?: { input: number; output: number };
+	/** The child model's context window in tokens, when the platform reports one;
+	 *  display-only (the pane header's context occupancy, ADR 0001). */
+	contextWindow?: number;
 	/** Best-effort accumulated child cost in USD; absent until the first usage-bearing message.
 	 *  Display-only — the settled ChildUsage is the single accounting source (§R11.6). */
 	cost?: number;
@@ -325,6 +328,7 @@ async function runOnce(args: RunOnceArgs): Promise<SubagentResult> {
 			model: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
 			effectiveThinkingLevel: effectiveThinkingLevel(session),
 			tokens: tokensSeen ? { input: tokensIn, output: tokensOut } : undefined,
+			contextWindow: session.model?.contextWindow,
 			cost: costSeen ? costTotal : undefined,
 		});
 	};

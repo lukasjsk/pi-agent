@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-10-26
+
+### Added
+
+- Inside the Herdr terminal, every subagent spawn now opens a Herdr pane hosting a display-only pane viewer: a scrollable live mirror of the child's activity (tool calls, streamed output lines) plus a status bar (agent name, model, context usage, cost) drawn from the footer extension's segment functions. The child's spawn path relays its activity events over a per-spawn local Unix socket; the viewer renders them and never receives input, so the pane is pure display — a Herdr, socket, or viewer failure can never fail or delay a spawn (ADR 0001, `docs/adr/0001-subagent-panes-are-display-only-mirrors.md`). Once the run settles, the pane closes after a 15-second countdown; the manager (orchestrator process) owns that close, so the pane goes away even when no viewer ever attached, and `session_shutdown` closes every open pane. A new `extensions/subagents/pane/` module holds the NDJSON wire protocol, the Herdr CLI wrapper, the per-spawn event server, the pane manager (placement, open chain, close backstop), and the viewer process; the pane header reuses the footer segments, and the glossary gains the pane terms.
+
 ## 2026-10-19
 
 ### Changed

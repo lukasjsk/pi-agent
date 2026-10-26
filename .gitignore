@@ -2,3 +2,4 @@
 .firecrawl/
 .pi/
 /.agents/
+node_modules/

@@ -70,6 +70,18 @@ _Avoid_: grandchild spawn, second-level agent, scout-in-worker
 A child tool result's usage as the spawn's total cost across all attempts — including failed fallback retries and cancelled partial runs. The footer's per-agent breakdown is a share of that total, never additive.
 _Avoid_: per-attempt usage, last-attempt usage, incremental usage
 
+**Subagent pane**:
+A Herdr pane dedicated to one subagent run, hosting its pane viewer. Display-only: the main session row stays the canonical record of the run. Placement: first spawn goes to the right of the main pane; concurrent siblings stack vertically underneath each other in that column.
+_Avoid_: agent window, agent panel, task terminal
+
+**Pane viewer**:
+The read-only live view of one subagent run inside a subagent pane: the run's full scrollable activity plus the pane header.
+_Avoid_: child TUI, subagent terminal, mirror session
+
+**Pane header**:
+The status bar at the top of a subagent pane: the child's model, its context occupancy, and its accumulated cost. The footer extension's segments are the single home of this rendering; the pane header is the same segments rendered at the top of the pane.
+_Avoid_: pane footer, subagent status line
+
 **Structured output**:
 The final report every subagent must produce: a role-specific markdown `result` plus a fenced JSON footer with `openQuestions[]`, `decisionPoints[]`, and `filesTouched[]`. The extension parses the footer; on parse failure the report degrades to plain `result` with a warning, never failing the child for format. Extension-appended provenance (model used, requested vs effective thinking level, fallback diagnostics) rides alongside.
 _Avoid_: summary, report format, JSON schema output
