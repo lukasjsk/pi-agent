@@ -61,6 +61,12 @@ export class SubagentPaneManager {
 	/** Placement state: the last subagent pane whose split SUCCEEDED. */
 	private lastSubagentPaneId: string | undefined;
 	private readonly openPanes = new Set<OpenPaneEntry>();
+	/**
+	 * FIFO queue serializing the pane chains: placement reads lastSubagentPaneId
+	 * between the async herdr calls, so two parallel spawns must not both target
+	 * the stale state — splits run strictly one at a time, in spawn order.
+	 */
+	private placementQueue: Promise<void> = Promise.resolve();
 
 	constructor(opts: SubagentPaneManagerOptions) {
 		this.opts = opts;
@@ -111,7 +117,13 @@ export class SubagentPaneManager {
 			stop: () => this.stopEntry(entry),
 		};
 
-		void this.openPane(agent, sockPath, entry);
+		// Enqueue: this spawn's chain starts only after the previous spawn's chain
+		// finished, so parallel spawns stack instead of fanning out beside the main
+		// pane. A chain never rejects (every step is best-effort), the catch is a
+		// belt-and-braces guard so one bad chain can never jam the queue.
+		this.placementQueue = this.placementQueue
+			.then(() => this.openPane(agent, sockPath, entry))
+			.catch(() => undefined);
 		return relay;
 	}
 

@@ -17,7 +17,7 @@ import { decodePaneEvent, PANE_REPORT_PREVIEW_CHARS, type PaneEvent } from "./pr
 type Direction = "right" | "down";
 
 /** Fake HerdrPaneControl: a plain object with the pane methods, recording every call. */
-function fakeHerdr(over: { failSplit?: boolean; runFails?: boolean; renameFails?: boolean } = {}) {
+function fakeHerdr(over: { failSplit?: boolean; runFails?: boolean; renameFails?: boolean; splitDelayMs?: number } = {}) {
 	const state = {
 		splits: [] as { paneId: string; direction: Direction; cwd: string }[],
 		renames: [] as { paneId: string; label: string }[],
@@ -30,6 +30,7 @@ function fakeHerdr(over: { failSplit?: boolean; runFails?: boolean; renameFails?
 		control: {
 			async split(paneId: string, direction: Direction, cwd: string) {
 				state.splits.push({ paneId, direction, cwd });
+				if (over.splitDelayMs) await new Promise((resolve) => setTimeout(resolve, over.splitDelayMs));
 				if (over.failSplit) return undefined;
 				return `fake:p${state.next++}`;
 			},
@@ -159,6 +160,21 @@ test("open returns a live relay synchronously: the first spawn splits the main p
 
 	relay!.stop();
 	relay2!.stop();
+	await rm(root, { recursive: true, force: true });
+});
+
+test("parallel spawns stack: the second split targets the first subagent pane, not the main pane", async () => {
+	const root = await makeTempRoot();
+	const { control, state } = fakeHerdr({ splitDelayMs: 30 });
+	const manager = makeManager(root, control);
+	// Two spawns open in the same tick — before any split has answered.
+	manager.open("worker", "worker-ab12");
+	manager.open("scout", "scout-cd34");
+	await new Promise((resolve) => setTimeout(resolve, 150));
+	assert.equal(state.splits.length, 2);
+	assert.deepEqual(state.splits[0], { paneId: "w1:p1", direction: "right", cwd: "/home/u/repo" }, "first spawn: right of the main pane");
+	assert.deepEqual(state.splits[1], { paneId: "fake:p1", direction: "down", cwd: "/home/u/repo" }, "second spawn: down of the first subagent pane");
+	manager.closeAll();
 	await rm(root, { recursive: true, force: true });
 });
 
