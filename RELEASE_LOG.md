@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-11-09
+
+### Added
+
+- [`extensions/cc-ui/`](extensions/cc-ui) adds a Claude Code style UI: grouped one-line tool calls, syntax-highlighted edit/write diffs, an activity spinner, collapsible thinking (`Thought for Xs`), colors derived from the terminal theme, and `❯` markers on past prompts and the input line. The extension is a port of [FammasMaz/pi-cc-tools](https://github.com/FammasMaz/pi-cc-tools) (MIT), ported after a security review; its README records the provenance and the audit. The reason: the default Pi UI renders each tool call with full detail, which makes long sessions hard to scan, so the compact one-line style keeps the visible output short while the commands `/cc-tools`, `/cc-theme`, and `/cc-spinner` turn each part on and off independently. The extension carries npm dependencies (`diff`, `@shikijs/cli`); its `node_modules/` is git-ignored, and the README documents the one-time `npm install` step.
+
 ## 2026-10-25
 
 ### Fixed

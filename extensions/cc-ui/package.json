@@ -1,0 +1,24 @@
+{
+	"name": "pi-agent-config-cc-ui",
+	"private": true,
+	"version": "1.0.0",
+	"description": "Claude Code style UI for pi, ported from https://github.com/FammasMaz/pi-cc-tools (MIT, FammasMaz): grouped tool rows, syntax-highlighted diffs, activity spinner, thinking collapse, terminal-following colors, and prompt markers.",
+	"license": "MIT",
+	"scripts": {
+		"typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict index.ts spinner.ts"
+	},
+	"dependencies": {
+		"@shikijs/cli": "^4.0.2",
+		"diff": "^9.0.0"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts",
+			"./spinner.ts"
+		]
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.5",
+		"typescript": "^5.9.3"
+	}
+}

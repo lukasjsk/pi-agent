@@ -10,6 +10,7 @@ Reusable configuration artifacts for [Pi](https://github.com/badlogic/pi-mono), 
 | [`AGENTS.md`](AGENTS.md) | Project instructions for agents that work in this repository: prefer ASD-STE100 Simplified Technical English for agent-facing text, with the conditions that call for it and the cases where it does not apply. |
 | [`GLOSSARY.md`](GLOSSARY.md) | The domain language (ubiquitous-language glossary) for the subagents extension: orchestrator, subagent, worker, scout, researcher, and the other terms the extension's docs and source comments cite. Named for the convention the Matt Pocock skills read (`GLOSSARY.md`, or `GLOSSARY-MAP.md` in a multi-context repo). |
 | [`extensions/footer/`](extensions/footer) | A configurable two-row status footer with model, usage, context, Git, Copilot quota, and other display segments. |
+| [`extensions/cc-ui/`](extensions/cc-ui) | A Claude Code style UI: grouped one-line tool calls, syntax-highlighted edit/write diffs, an activity spinner, collapsible thinking (`Thought for Xs`), colors derived from the terminal theme, and `❯` markers on past prompts and the input line. Ported from [FammasMaz/pi-cc-tools](https://github.com/FammasMaz/pi-cc-tools) (MIT) after a security review; see its [README](extensions/cc-ui/README.md) for provenance, the audit, and the `/cc-tools`, `/cc-theme`, `/cc-spinner` commands. |
 | [`extensions/ask-user-question/index.ts`](extensions/ask-user-question/index.ts) | An `ask_user_question` tool that pauses execution to ask the user a single question in the interactive TUI, with free-form text, single-select, or multi-select answers plus an "Other" custom input; its prompt guidance requires decision points and next-step choices (2+ options) to be rendered as tool options rather than prose. |
 | [`extensions/require-ripgrep/`](extensions/require-ripgrep) | A guidance extension that steers searches toward `rg` (ripgrep) instead of `grep`. |
 | [`themes/slop.json`](themes/slop.json) | The `slop` interactive color theme. |
@@ -48,6 +49,14 @@ done
 > The command replaces only same-named resources from this repository (for example, `extensions/footer`), not the whole Pi resource directory. Back up local changes to those same-named resources first.
 
 Restart Pi after installing or changing extensions. Select the theme with Pi's theme picker.
+
+The [`extensions/cc-ui/`](extensions/cc-ui) extension has npm dependencies (`diff`, `@shikijs/cli`). After cloning, install them once:
+
+```bash
+(cd extensions/cc-ui && npm install)
+```
+
+Its `node_modules/` is git-ignored; the symlinks above make the extension visible to Pi, and Pi's jiti loader resolves the dependencies from the extension's own `node_modules/`.
 
 ### Per-agent model config (optional)
 
