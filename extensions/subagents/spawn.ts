@@ -1,7 +1,9 @@
 // Child subagent session assembly and execution (SDK in-process, per spec §R1).
 // Isolation guarantees enforced here:
 //   - SessionManager.inMemory()  → ephemeral, no session file
-//   - DefaultResourceLoader({ noExtensions: true }) → children never load extensions (hard rule)
+//   - DefaultResourceLoader({ noExtensions: true }) → children never load file extensions (hard rule);
+//     the built-in codemode extension factory is the one exception (sdk.md "Codemode and MCP") —
+//     it registers `codemode` inactive; only a definition whose tools list names it gets it
 //   - systemPromptOverride       → the definition body is the child's entire role prompt;
 //                                  the child receives none of the parent's conversation
 //   - tools                      → the definition's allowlist; unknown names fail the spawn fast
@@ -13,6 +15,7 @@
 
 import {
 	createAgentSession,
+	createCodemodeExtension,
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
@@ -131,8 +134,9 @@ export interface SpawnRunOptions {
 	retryBackoffMs?: number;
 }
 
-/** Platform built-in tool names (sdk.md "Tools"). */
-const BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
+/** Platform built-in tool names (sdk.md "Tools"), plus `codemode`, the built-in extension tool
+ *  children get through the codemode extension factory (cli.md "Enable codemode"). */
+const BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "codemode"]);
 
 /** Unknown tool name → that agent's spawn fails fast (spec §R5.2). Throws before any session is created. */
 export function validateToolNames(definition: AgentDefinition): void {
@@ -187,7 +191,10 @@ export async function runSubagent(options: SpawnRunOptions): Promise<SubagentRes
 	const loader = new DefaultResourceLoader({
 		cwd,
 		agentDir,
-		noExtensions: true, // hard rule: children never load extensions (spec §R1.4)
+		noExtensions: true, // hard rule: children never load file extensions (spec §R1.4)
+		// Registers the built-in `codemode` tool for this SDK session. It is registered inactive:
+		// only a definition whose tools allowlist names `codemode` gets it enabled.
+		extensionFactories: [createCodemodeExtension()],
 		noThemes: true,
 		noPromptTemplates: true,
 		noSkills: !definition.skills, // skills: off → child skips skill discovery (spec §R2.2)

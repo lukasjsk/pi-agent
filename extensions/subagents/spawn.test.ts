@@ -54,7 +54,12 @@ test("assembles an isolated in-process child per the spec's isolation rules", as
 	assert.deepEqual(opts.model, undefined); // no model option → platform resolves from settings
 
 	const loaderOptions = loaders[loaders.length - 1];
-	assert.equal(loaderOptions.noExtensions, true, "children never load extensions");
+	assert.equal(loaderOptions.noExtensions, true, "children never load file extensions");
+	assert.deepEqual(
+		loaderOptions.extensionFactories,
+		[{ __marker: "codemode-extension" }],
+		"built-in codemode factory registered (inactive unless the allowlist names it)",
+	);
 	assert.equal(loaderOptions.noThemes, true);
 	assert.equal(loaderOptions.noPromptTemplates, true);
 	assert.equal(loaderOptions.cwd, "/repo");
@@ -619,6 +624,10 @@ test("an error message on settled state fails the spawn", async () => {
 	const result = await runSubagent(baseOptions);
 	assert.equal(result.status, "failed");
 	assert.ok(result.diagnostics.some((d) => /all retries exhausted/.test(d)));
+});
+
+test("codemode is a valid child tool name: the built-in extension factory covers it", () => {
+	assert.doesNotThrow(() => validateToolNames({ ...scout, tools: ["read", "codemode"] }));
 });
 
 test("unknown tool names fail the spawn before any session is created", async () => {

@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-11-11
+
+### Added
+
+- The `subagents` extension now makes the built-in `codemode` tool available to child sessions: `spawn.ts` adds `createCodemodeExtension()` to the child `DefaultResourceLoader`'s `extensionFactories`, because SDK sessions do not load the codemode extension by themselves (sdk.md, "Codemode and MCP"). The extension registers `codemode` inactive, so only a definition that names it in its `tools` allowlist gets it enabled, and the spawn-time validation now accepts `codemode` as a valid tool name. The `worker` definition gains the tool plus one prompt rule on when to use it: several independent tool calls in one parallel script (`Promise.allSettled`), or filtering a large result before the worker reads it. The reason: a worker verifying a change with several independent calls — running a test, reading a log, reading a diff — previously ran them one at a time, each round-trip to the model; a codemode script runs them in parallel and hands back only the filtered output. On the orchestrator side, `codemode` is enabled through `"defaultTools": ["+codemode"]` in `~/.pi/agent/settings.json` (user config, not part of this repository). `SUBAGENTS_EXTENSION.md` (§R5.2 and the `worker` section) records both changes; the shared platform mock and the spawn suite cover the new factory registration and tool name.
+
 ## 2026-11-09
 
 ### Added

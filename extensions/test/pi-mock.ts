@@ -42,6 +42,10 @@ export const piCodingAgentMock = {
 	},
 	// subagents needs:
 	createAgentSession: (options: Record<string, unknown>) => platformHooks.createAgentSession(options),
+	// Built-in codemode extension factory (sdk.md "Codemode and MCP"). The real factory returns
+	// an extension function; the mock returns a marker so suites can assert on the loader's
+	// extensionFactories without executing extension code.
+	createCodemodeExtension: (_options?: Record<string, unknown>) => ({ __marker: "codemode-extension" }),
 	DefaultResourceLoader: class {
 		options: Record<string, unknown>;
 		constructor(options: Record<string, unknown>) {

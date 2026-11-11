@@ -79,8 +79,10 @@ Three bundled definitions, freshly designed (deprecated prompts are reference on
   every claim carries an exact `file:line` reference.
 
 **`worker`** — general-purpose implementation work.
-- `tools: [read, bash, edit, write, grep, find, ls]` — full write access. No injected tools: a worker cannot
-  spawn subagents and does its own reconnaissance.
+- `tools: [read, bash, edit, write, grep, find, ls, codemode]` — full write access. No injected tools: a worker cannot
+  spawn subagents and does its own reconnaissance. `codemode` is the built-in extension tool registered on the
+  child's resource loader (§R5.2); its prompt carries one rule on when to reach for it: several independent tool
+  calls in one parallel script, or filtering a large result before reading it.
 - `skills: on` (see §R10 for leverage behavior).
 - No model chain in the definition: model selection comes from the config file (§R13); without
   one, the worker runs on the orchestrator's model.
@@ -130,7 +132,8 @@ An agent's model list (from the config file, §R13) is an **ordered list**. Reso
 
 1. `tools` is the allowlist applied at session creation (`createAgentSession({ tools })`).
 2. **Unknown tool name → that agent's spawn fails** (fail fast) with a diagnostic listing the unknown names and the
-   valid ones. (Platform built-ins: `read, bash, edit, write, grep, find, ls`.)
+   valid ones. (Platform built-ins: `read, bash, edit, write, grep, find, ls`, plus `codemode` — the built-in
+   extension tool the child loader registers through `createCodemodeExtension()`, inactive unless the allowlist names it.)
 3. A user definition omitting `tools` **fails to load** (not silent defaults).
 4. **No spawn gate**: no confirmation prompt; children are same-trust as the orchestrator session. Visibility comes
    from live TUI streaming (§R10.5) and Esc-cancel.
