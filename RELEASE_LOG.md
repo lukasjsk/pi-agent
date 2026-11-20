@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-11-20
+
+### Added
+
+- Subagent panes now also open in the Herdr desktop app. Inside an app terminal the extension detects `HC_TERMINAL_ID`, resolves the orchestrator's pane from `herdr-app ls`, and starts the same display-only viewer with `herdr-app do pane.split --argv …`. The app's pane header shows the viewer's terminal title, which the viewer now sets from the `hello` event; the app closes the pane when the viewer exits, while the manager keeps its close backstop for a pane whose viewer never attached. The pane layer is refactored around a `PaneMultiplexer` seam (`pane/multiplexer.ts`, `pane/registry.ts`): `pane/herdr.ts` is the TUI adapter, `pane/herdr-app.ts` is the app adapter, and `pane/placement.ts` holds the shared placement policy. Adding another multiplexer is one adapter module plus one registry entry. ADR 0001 and the glossary record the new seam and the app's local-only limitation.
+
 ## 2026-11-11
 
 ### Added

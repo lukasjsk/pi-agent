@@ -1,7 +1,7 @@
 // manager.test.ts — ADR 0001 subagent pane manager: the synchronous open path
-// returns a live relay immediately; the Herdr pane chain (split → rename → run)
-// is async and best-effort. The Herdr control is a plain fake (structural typing);
-// the pane event server is real, in a temp dir.
+// returns a live relay immediately; the anchor lookup and multiplexer open chain
+// are async and best-effort. The multiplexer adapter is a plain fake (structural
+// typing); the pane event server is real, in a temp dir.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,38 +9,66 @@ import { connect, type Socket } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { SubagentPaneManager, type PaneRelay } from "./manager.ts";
+import { join } from "node:path";
+import { SubagentPaneManager } from "./manager.ts";
+import type { OpenedPane, OpenPaneRequest, PaneDirection, PaneMultiplexer } from "./multiplexer.ts";
 import { paneSocketPath } from "./server.ts";
 import { decodePaneEvent, PANE_REPORT_PREVIEW_CHARS, type PaneEvent } from "./protocol.ts";
 
-type Direction = "right" | "down";
+type OpenCall = {
+	target: string;
+	direction: PaneDirection;
+	cwd: string;
+	label: string;
+	viewer: readonly string[];
+};
 
-/** Fake HerdrPaneControl: a plain object with the pane methods, recording every call. */
-function fakeHerdr(over: { failSplit?: boolean; runFails?: boolean; renameFails?: boolean; splitDelayMs?: number } = {}) {
-	const state = {
-		splits: [] as { paneId: string; direction: Direction; cwd: string }[],
-		renames: [] as { paneId: string; label: string }[],
-		runs: [] as { paneId: string; command: string }[],
-		closes: [] as string[],
-		next: 1,
+type FakeMuxOptions = {
+	failSplit?: boolean;
+	viewerFails?: boolean;
+	labelDiagnostic?: boolean;
+	splitDelayMs?: number;
+	anchor?: string | undefined;
+	anchorThrows?: boolean;
+	anchorResults?: Array<string | undefined>;
+};
+
+/** Fake multiplexer: records every adapter call, replays the requested failures. */
+function fakeMux(over: FakeMuxOptions = {}): {
+	state: {
+		anchors: number;
+		opens: OpenCall[];
+		closes: string[];
 	};
+	multiplexer: PaneMultiplexer;
+} {
+	const state = { anchors: 0, opens: [] as OpenCall[], closes: [] as string[] };
+	let next = 1;
 	return {
 		state,
-		control: {
-			async split(paneId: string, direction: Direction, cwd: string) {
-				state.splits.push({ paneId, direction, cwd });
+		multiplexer: {
+			name: "fake",
+			async anchor() {
+				state.anchors++;
+				if (over.anchorThrows) throw new Error("anchor exploded");
+				if (over.anchorResults) return over.anchorResults[Math.min(state.anchors - 1, over.anchorResults.length - 1)];
+				return "anchor" in over ? over.anchor : "w1:p1";
+			},
+			async open(request: OpenPaneRequest): Promise<OpenedPane | undefined> {
+				state.opens.push({
+					target: request.target,
+					direction: request.direction,
+					cwd: request.cwd,
+					label: request.label,
+					viewer: [...request.viewer.argv],
+				});
 				if (over.splitDelayMs) await new Promise((resolve) => setTimeout(resolve, over.splitDelayMs));
 				if (over.failSplit) return undefined;
-				return `fake:p${state.next++}`;
-			},
-			async rename(paneId: string, label: string) {
-				state.renames.push({ paneId, label });
-				return !over.renameFails;
-			},
-			async run(paneId: string, command: string) {
-				state.runs.push({ paneId, command });
-				return !over.runFails;
+				return {
+					paneId: `fake:p${next++}`,
+					viewerStarted: !over.viewerFails,
+					...(over.labelDiagnostic ? { diagnostics: ["pane rename failed for scout"] } : {}),
+				};
 			},
 			async close(paneId: string) {
 				state.closes.push(paneId);
@@ -50,14 +78,13 @@ function fakeHerdr(over: { failSplit?: boolean; runFails?: boolean; renameFails?
 	};
 }
 
-function makeManager(root: string, herdr: unknown, over: Record<string, unknown> = {}) {
+function makeManager(root: string, multiplexer: PaneMultiplexer, over: Record<string, unknown> = {}) {
 	return new SubagentPaneManager({
-		herdr,
-		mainPaneId: "w1:p1",
+		multiplexer,
 		cwd: "/home/u/repo",
 		sessionId: "sess-1",
 		socketRoot: root,
-		viewerCommand: (sockPath) => `pi pane-viewer --sock ${sockPath}`,
+		viewerArgv: (sockPath) => ["pi", "pane-viewer", "--sock", sockPath],
 		flushIntervalMs: 50,
 		closeDelayMs: 50,
 		...over,
@@ -139,59 +166,82 @@ async function connectClient(path: string, timeoutMs = 2000): Promise<Client | u
 	}
 }
 
-test("open returns a live relay synchronously: the first spawn splits the main pane right, the second stacks down", async () => {
+test("open returns a live relay synchronously: the first spawn splits the anchor right, the second stacks down", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 
 	const relay = manager.open("worker", "worker-ab12", "implement the feature");
 	assert.ok(relay, "a detected manager always returns a relay");
 	assert.equal(relay!.spawnId, "worker-ab12");
 
 	await settleChain();
-	assert.deepEqual(state.splits, [{ paneId: "w1:p1", direction: "right", cwd: "/home/u/repo" }]);
 	const sockPath = paneSocketPath({ root, sessionId: "sess-1", spawnId: "worker-ab12" });
-	assert.deepEqual(state.renames, [{ paneId: "fake:p1", label: "worker" }]);
-	assert.deepEqual(state.runs, [{ paneId: "fake:p1", command: `pi pane-viewer --sock ${sockPath}` }]);
+	assert.deepEqual(state.opens, [
+		{
+			target: "w1:p1",
+			direction: "right",
+			cwd: "/home/u/repo",
+			label: "worker",
+			viewer: ["pi", "pane-viewer", "--sock", sockPath],
+		},
+	]);
+	assert.equal(state.anchors, 1, "the anchor is resolved once per session");
 
 	const relay2 = manager.open("scout", "scout-cd34");
 	await settleChain();
-	assert.deepEqual(state.splits[1], { paneId: "fake:p1", direction: "down", cwd: "/home/u/repo" });
+	assert.deepEqual(state.opens[1], {
+		target: "fake:p1",
+		direction: "down",
+		cwd: "/home/u/repo",
+		label: "scout",
+		viewer: ["pi", "pane-viewer", "--sock", paneSocketPath({ root, sessionId: "sess-1", spawnId: "scout-cd34" })],
+	});
+	assert.equal(state.anchors, 1, "the cached anchor is reused");
 
 	relay!.stop();
 	relay2!.stop();
 	await rm(root, { recursive: true, force: true });
 });
 
-test("parallel spawns stack: the second split targets the first subagent pane, not the main pane", async () => {
+test("parallel spawns stack: the second split targets the first subagent pane, not the anchor", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr({ splitDelayMs: 30 });
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux({ splitDelayMs: 30 });
+	const manager = makeManager(root, multiplexer);
 	// Two spawns open in the same tick — before any split has answered.
 	manager.open("worker", "worker-ab12");
 	manager.open("scout", "scout-cd34");
 	await new Promise((resolve) => setTimeout(resolve, 150));
-	assert.equal(state.splits.length, 2);
-	assert.deepEqual(state.splits[0], { paneId: "w1:p1", direction: "right", cwd: "/home/u/repo" }, "first spawn: right of the main pane");
-	assert.deepEqual(state.splits[1], { paneId: "fake:p1", direction: "down", cwd: "/home/u/repo" }, "second spawn: down of the first subagent pane");
+	assert.equal(state.opens.length, 2);
+	assert.deepEqual(
+		{ target: state.opens[0].target, direction: state.opens[0].direction },
+		{ target: "w1:p1", direction: "right" },
+		"first spawn: right of the anchor",
+	);
+	assert.deepEqual(
+		{ target: state.opens[1].target, direction: state.opens[1].direction },
+		{ target: "fake:p1", direction: "down" },
+		"second spawn: down of the first subagent pane",
+	);
 	manager.closeAll();
 	await rm(root, { recursive: true, force: true });
 });
 
-test("a failed split falls back to splitting the main pane right, then the relay no-ops safely", async () => {
+test("a failed split falls back to splitting the anchor right, then the relay no-ops safely", async () => {
 	const root = await makeTempRoot();
 	const messages: string[] = [];
-	const { control, state } = fakeHerdr({ failSplit: true });
-	const manager = makeManager(root, control, { log: (m: string) => messages.push(m) });
+	const { multiplexer, state } = fakeMux({ failSplit: true });
+	const manager = makeManager(root, multiplexer, { log: (m: string) => messages.push(m) });
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
-	// Both split attempts targeted the main pane right; no rename, no viewer run.
-	assert.deepEqual(state.splits, [
-		{ paneId: "w1:p1", direction: "right", cwd: "/home/u/repo" },
-		{ paneId: "w1:p1", direction: "right", cwd: "/home/u/repo" },
-	]);
-	assert.equal(state.renames.length, 0);
-	assert.equal(state.runs.length, 0);
+	// Both split attempts targeted the anchor right; no pane was recorded.
+	assert.deepEqual(
+		state.opens.map((o) => ({ target: o.target, direction: o.direction })),
+		[
+			{ target: "w1:p1", direction: "right" },
+			{ target: "w1:p1", direction: "right" },
+		],
+	);
 	assert.ok(messages.length >= 1, "the failure is logged");
 	// The server is stopped: the spawn's relay calls are safe no-ops.
 	relay.relay(activity("still safe"));
@@ -202,24 +252,69 @@ test("a failed split falls back to splitting the main pane right, then the relay
 		200,
 	);
 	assert.equal(client, undefined, "no viewer can reach a skipped pane");
-	// A later spawn still targets the main pane right (state did not advance).
+	// A later spawn still targets the anchor right (state did not advance).
 	manager.open("scout", "scout-cd34")!;
 	await settleChain();
-	assert.equal(state.splits[2].paneId, "w1:p1");
-	assert.equal(state.splits[2].direction, "right");
+	const last = state.opens[state.opens.length - 1];
+	assert.equal(last.target, "w1:p1");
+	assert.equal(last.direction, "right");
+	assert.equal(state.anchors, 2, "the anchor is re-resolved after the failed chain");
 	manager.closeAll();
 	await rm(root, { recursive: true, force: true });
 });
 
-test("a failing viewer run keeps the server live: a later viewer still gets the stream", async () => {
+test("an unavailable anchor skips the pane, stops the server, and is retried by the next spawn", async () => {
 	const root = await makeTempRoot();
 	const messages: string[] = [];
-	const { control, state } = fakeHerdr({ runFails: true });
-	const manager = makeManager(root, control, { log: (m: string) => messages.push(m) });
+	const { multiplexer, state } = fakeMux({ anchorResults: [undefined, "w1:p1"] });
+	const manager = makeManager(root, multiplexer, { log: (m: string) => messages.push(m) });
+
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
-	assert.equal(state.splits.length, 1); // the pane exists even though the viewer did not start
-	assert.ok(messages.length >= 1, "the viewer failure is logged");
+	assert.equal(state.anchors, 1);
+	assert.equal(state.opens.length, 0, "no split without an anchor");
+	assert.ok(messages.some((m) => /no fake anchor pane/.test(m)), "the missing anchor is logged");
+	relay.settle(settledPayload());
+	relay.relay(activity("safe"));
+	relay.stop();
+	const client = await connectClient(
+		paneSocketPath({ root, sessionId: "sess-1", spawnId: "worker-ab12" }),
+		200,
+	);
+	assert.equal(client, undefined, "the skipped pane has no server");
+
+	// The failed lookup was not cached: the next spawn resolves the anchor and splits.
+	manager.open("scout", "scout-cd34");
+	await settleChain();
+	assert.equal(state.anchors, 2);
+	assert.equal(state.opens.length, 1);
+	assert.equal(state.opens[0].target, "w1:p1");
+	assert.equal(state.opens[0].direction, "right");
+	manager.closeAll();
+	await rm(root, { recursive: true, force: true });
+});
+
+test("an anchor lookup that throws is treated as unavailable, never as a spawn failure", async () => {
+	const root = await makeTempRoot();
+	const messages: string[] = [];
+	const { multiplexer, state } = fakeMux({ anchorThrows: true });
+	const manager = makeManager(root, multiplexer, { log: (m: string) => messages.push(m) });
+	manager.open("worker", "worker-ab12");
+	await settleChain();
+	assert.equal(state.opens.length, 0);
+	assert.ok(messages.length >= 1);
+	manager.closeAll();
+	await rm(root, { recursive: true, force: true });
+});
+
+test("a failing viewer keeps the server live: a later viewer still gets the stream", async () => {
+	const root = await makeTempRoot();
+	const messages: string[] = [];
+	const { multiplexer, state } = fakeMux({ viewerFails: true, labelDiagnostic: false });
+	const manager = makeManager(root, multiplexer, { log: (m: string) => messages.push(m) });
+	const relay = manager.open("worker", "worker-ab12")!;
+	await settleChain();
+	assert.equal(state.opens.length, 1); // the pane exists even though the viewer did not start
 	const client = await connectClient(
 		paneSocketPath({ root, sessionId: "sess-1", spawnId: "worker-ab12" }),
 	);
@@ -235,8 +330,8 @@ test("a failing viewer run keeps the server live: a later viewer still gets the 
 
 test("settle sends a settled event whose reportPreview is capped at the relay cap", async () => {
 	const root = await makeTempRoot();
-	const { control } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
 	const client = await connectClient(
@@ -272,8 +367,8 @@ test("settle sends a settled event whose reportPreview is capped at the relay ca
 
 test("a relay settled after its server stopped cannot resurrect it", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr({ failSplit: true });
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux({ failSplit: true });
+	const manager = makeManager(root, multiplexer);
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
 	relay.settle(settledPayload()); // the server already stopped (split failed)
@@ -284,14 +379,14 @@ test("a relay settled after its server stopped cannot resurrect it", async () =>
 		200,
 	);
 	assert.equal(client, undefined, "no socket was recreated by a post-stop settle");
-	assert.ok(state.splits.length === 2);
+	assert.ok(state.opens.length === 2);
 	await rm(root, { recursive: true, force: true });
 });
 
 test("closeAll stops every open server and unlinks their socket files", async () => {
 	const root = await makeTempRoot();
-	const { control } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 	const relay1 = manager.open("worker", "worker-ab12")!;
 	const relay2 = manager.open("scout", "scout-cd34")!;
 	await settleChain();
@@ -314,8 +409,8 @@ test("closeAll stops every open server and unlinks their socket files", async ()
 
 test("settle closes the pane itself after the countdown: the manager owns the pane close (ADR 0001)", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr();
-	const manager = makeManager(root, control); // closeDelayMs: 50
+	const { multiplexer, state } = fakeMux();
+	const manager = makeManager(root, multiplexer); // closeDelayMs: 50
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
 	assert.equal(state.closes.length, 0, "no close before settle");
@@ -329,8 +424,8 @@ test("settle closes the pane itself after the countdown: the manager owns the pa
 
 test("closeAll closes every open pane, not just its servers (session_shutdown)", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 	manager.open("worker", "worker-ab12");
 	manager.open("scout", "scout-cd34");
 	await settleChain();
@@ -342,8 +437,8 @@ test("closeAll closes every open pane, not just its servers (session_shutdown)",
 
 test("a relay stopped before settle never closes a pane later", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
 	relay.settle(settledPayload());
@@ -354,30 +449,29 @@ test("a relay stopped before settle never closes a pane later", async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
-test("a viewerless pane (failed run) still closes after the settle countdown", async () => {
+test("a viewerless pane (failed viewer start) still closes after the settle countdown", async () => {
 	const root = await makeTempRoot();
-	const { control, state } = fakeHerdr({ runFails: true });
-	const manager = makeManager(root, control);
+	const { multiplexer, state } = fakeMux({ viewerFails: true });
+	const manager = makeManager(root, multiplexer);
 	const relay = manager.open("worker", "worker-ab12")!;
 	relay.settle(settledPayload()); // the run ended while the chain was still running
 	await settleChain();
-	assert.equal(state.runs.length, 1);
+	assert.equal(state.opens.length, 1);
 	await new Promise((resolve) => setTimeout(resolve, 100));
 	assert.deepEqual(state.closes, ["fake:p1"], "the viewerless pane is closed by the backstop");
 	manager.closeAll();
 	await rm(root, { recursive: true, force: true });
 });
 
-test("a failing rename is logged but the chain continues: the viewer still starts", async () => {
+test("an adapter diagnostic (failed pane label) is logged and the chain still succeeds", async () => {
 	const root = await makeTempRoot();
 	const messages: string[] = [];
-	const { control, state } = fakeHerdr({ renameFails: true });
-	const manager = makeManager(root, control, { log: (m: string) => messages.push(m) });
+	const { multiplexer, state } = fakeMux({ labelDiagnostic: true });
+	const manager = makeManager(root, multiplexer, { log: (m: string) => messages.push(m) });
 	const relay = manager.open("scout", "scout-cd34")!;
 	await settleChain();
-	assert.equal(state.renames.length, 1);
-	assert.ok(messages.length >= 1, "the rename failure is logged");
-	assert.equal(state.runs.length, 1, "the viewer is started despite the rename failure");
+	assert.equal(state.opens.length, 1);
+	assert.ok(messages.some((m) => /rename failed/.test(m)), "the adapter diagnostic is logged");
 	relay.stop();
 	manager.closeAll();
 	await rm(root, { recursive: true, force: true });
@@ -385,8 +479,8 @@ test("a failing rename is logged but the chain continues: the viewer still start
 
 test("a spawn's relay and settle reach the pane, then the pane closes after the countdown", async () => {
 	const root = await makeTempRoot();
-	const { control } = fakeHerdr();
-	const manager = makeManager(root, control); // closeDelayMs: 50
+	const { multiplexer } = fakeMux();
+	const manager = makeManager(root, multiplexer); // closeDelayMs: 50
 	const relay = manager.open("worker", "worker-ab12")!;
 	await settleChain();
 	const client = await connectClient(
@@ -414,8 +508,8 @@ test("a spawn's relay and settle reach the pane, then the pane closes after the 
 
 test("open truncates the task preview to 200 characters in the hello event", async () => {
 	const root = await makeTempRoot();
-	const { control } = fakeHerdr();
-	const manager = makeManager(root, control);
+	const { multiplexer } = fakeMux();
+	const manager = makeManager(root, multiplexer);
 	const longTask = `t${"x".repeat(500)}`;
 	const relay = manager.open("worker", "worker-ab12", longTask)!;
 	await settleChain();

@@ -12,6 +12,15 @@ import { contextPctSegment } from "../../footer/segments/context.ts";
 import { costSegment } from "../../footer/segments/cost.ts";
 import type { PaneActivityEvent, PaneSettledEvent } from "./protocol.ts";
 
+/**
+ * The terminal title for one subagent pane. The Herdr app's pane header reads the
+ * terminal title (it has no pane rename); stripping control characters keeps a
+ * title from injecting terminal escapes.
+ */
+export function paneTitle(agent: string, spawnId: string): string {
+	return `${agent} · ${spawnId}`.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
 /** The full state the pane's screen content is computed from. */
 export interface FrameState {
 	/** Latest activity snapshot (coalesced server-side). */

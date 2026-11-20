@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activityLines, buildFrame, buildPaneHeader, truncateToWidth, visibleSlice } from "./frame.ts";
+import { activityLines, buildFrame, buildPaneHeader, paneTitle, truncateToWidth, visibleSlice } from "./frame.ts";
 import type { PaneActivityEvent, PaneSettledEvent } from "./protocol.ts";
 
 /** Strip ANSI SGR escapes so assertions can match the visible text. */
@@ -179,6 +179,11 @@ test("truncateToWidth treats ANSI escapes as zero-width", () => {
 	assert.equal(truncateToWidth(colored, 9), colored);
 	assert.equal(truncateToWidth("\x1b[Habc", 3), "\x1b[Habc");
 	assert.equal(truncateToWidth("\x1b[Habc", 2), "\x1b[Hab");
+});
+
+test("paneTitle is the agent and spawn id, with control characters stripped", () => {
+	assert.equal(paneTitle("worker", "worker-ab12"), "worker · worker-ab12");
+	assert.equal(paneTitle("scout\x07", "scout\x1b[31m-cd34"), "scout · scout[31m-cd34");
 });
 
 test("visibleSlice returns the last height lines when following the tail", () => {

@@ -70,12 +70,16 @@ _Avoid_: grandchild spawn, second-level agent, scout-in-worker
 A child tool result's usage as the spawn's total cost across all attempts — including failed fallback retries and cancelled partial runs. The footer's per-agent breakdown is a share of that total, never additive.
 _Avoid_: per-attempt usage, last-attempt usage, incremental usage
 
+**Pane multiplexer**:
+The terminal multiplexer that hosts subagent panes: the Herdr TUI or the Herdr desktop app. The pane module has one adapter per multiplexer behind the `PaneMultiplexer` seam; an adapter owns detection, the anchor lookup, and the split/viewer/close commands. Adding a multiplexer is one adapter module plus one registry entry.
+_Avoid_: terminal manager, window manager, pane backend
+
 **Subagent pane**:
-A Herdr pane dedicated to one subagent run, hosting its pane viewer. Display-only: the main session row stays the canonical record of the run. Placement: first spawn goes to the right of the main pane; concurrent siblings stack vertically underneath each other in that column.
+A pane in the orchestrator's pane multiplexer dedicated to one subagent run, hosting its pane viewer. Display-only: the main session row stays the canonical record of the run. Placement: first spawn goes to the right of the main pane; concurrent siblings stack vertically underneath each other in that column.
 _Avoid_: agent window, agent panel, task terminal
 
 **Pane viewer**:
-The read-only live view of one subagent run inside a subagent pane: the run's full scrollable activity plus the pane header.
+The read-only live view of one subagent run inside a subagent pane: the run's full scrollable activity plus the pane header. The viewer is multiplexer-agnostic; the Herdr TUI starts it with `herdr pane run`, the Herdr app starts it as the new pane's argv.
 _Avoid_: child TUI, subagent terminal, mirror session
 
 **Pane header**:

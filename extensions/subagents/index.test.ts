@@ -897,18 +897,22 @@ test("queued-Esc never opens a pane: nothing ran, nothing to mirror (ADR 0001)",
 	await running;
 });
 
-test("paneManagerFor is absent outside Herdr and present inside it (ADR 0001 detection)", async () => {
+test("paneManagerFor is absent outside a multiplexer and present in the Herdr TUI and app", async () => {
 	const { paneManagerFor } = await import("./index.ts");
-	assert.equal(paneManagerFor({}, { cwd: "/repo" }), undefined, "no Herdr env → no panes");
+	assert.equal(paneManagerFor({}, { cwd: "/repo" }), undefined, "no multiplexer env → no panes");
 	assert.equal(
 		paneManagerFor({ HERDR_PANE_ID: "w1:p1" }, { cwd: "/repo" }),
 		undefined,
 		"a pane id without the Herdr env flag → no panes",
 	);
-	const manager = paneManagerFor({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_BIN_PATH: "/bin/herdr" }, { cwd: "/repo" });
-	assert.ok(manager, "Herdr detected → a pane manager exists");
-	assert.equal(typeof manager!.open, "function");
-	assert.equal(typeof manager!.closeAll, "function");
+	const tui = paneManagerFor({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_BIN_PATH: "/bin/herdr" }, { cwd: "/repo" });
+	assert.ok(tui, "Herdr TUI detected → a pane manager exists");
+	assert.equal(typeof tui!.open, "function");
+	assert.equal(typeof tui!.closeAll, "function");
+	const app = paneManagerFor({ HC_TERMINAL_ID: "t8", HC_TERMINAL_SOCKET: "/run/hc.sock" }, { cwd: "/repo" });
+	assert.ok(app, "Herdr app detected → a pane manager exists");
+	assert.equal(typeof app!.open, "function");
+	assert.equal(typeof app!.closeAll, "function");
 });
 
 test("failed and cancelled statuses render with distinct markers and diagnostics", () => {

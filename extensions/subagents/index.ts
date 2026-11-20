@@ -27,8 +27,8 @@ import { OVERFLOW_CAP_BYTES, inContextBody, newSpawnId, overflowFilePath } from 
 import { DEFAULT_MAX_CONCURRENT, parseMaxConcurrent, SpawnScheduler } from "./concurrency.ts";
 import { EMPTY_FOOTER } from "./report.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import { detectHerdr, HerdrPaneControl, type HerdrEnv } from "./pane/herdr.ts";
 import { SubagentPaneManager, type PaneRelay } from "./pane/manager.ts";
+import { createPaneMultiplexer, type PaneEnv } from "./pane/registry.ts";
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -96,8 +96,9 @@ export interface SubagentDeps {
 	/** Custom tools injected into scout child sessions: the git-history tools (§R12). Absent in
 	 *  tests unless wired explicitly. */
 	scoutTools?: () => ToolDefinition[];
-	/** The subagent pane mirror (ADR 0001): opens one display-only Herdr pane per spawn.
-	 *  Present only when the orchestrator runs inside Herdr; absent in tests unless wired. */
+	/** The subagent pane mirror (ADR 0001): opens one display-only multiplexer pane per
+	 *  spawn. Present only when a supported multiplexer is detected; absent in tests
+	 *  unless wired. */
 	pane?: {
 		open(agent: string, spawnId: string, task?: string): PaneRelay | undefined;
 	};
@@ -202,7 +203,7 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 		if (definition.name === RESEARCHER_AGENT_NAME) childTools = deps.researcherTools?.();
 		else if (definition.name === SCOUT_AGENT_NAME) childTools = deps.scoutTools?.();
 
-		// ADR 0001: inside Herdr the spawn's pane is a display-only mirror of these very
+		// ADR 0001: inside a supported multiplexer the spawn's pane is a display-only mirror of these very
 		// events. It opens when the run starts (never while queued), and every call is
 		// guarded: a pane failure can never fail or delay the spawn.
 		const spawnId = newSpawnId(definition.name);
@@ -275,8 +276,9 @@ export function createSubagentExecutor(deps: SubagentDeps) {
 				: undefined,
 		);
 
-		// ADR 0001: the pane settles with the run — the viewer shows the outcome, its
-		// countdown starts, and it closes the pane itself. Guarded like every pane call.
+		// ADR 0001: the pane settles with the run — the viewer shows the outcome and
+		// its countdown starts; the manager's backstop owns the close. Guarded like
+		// every pane call.
 		pane(() =>
 			paneRelay?.settle({
 				status: result.status,
@@ -333,22 +335,22 @@ function paneViewerRuntime(): string {
 
 /**
  * The per-session pane manager (ADR 0001): present only when the orchestrator runs
- * inside Herdr. The pane is a display-only mirror, so the manager's failures are
- * logged to stderr and never reach the spawn path.
+ * inside a supported multiplexer (Herdr TUI or Herdr app). The pane is a
+ * display-only mirror, so the manager's failures are logged to stderr and never
+ * reach the spawn path.
  */
 export function paneManagerFor(
-	env: HerdrEnv,
+	env: PaneEnv,
 	ctx: { cwd: string; getSessionId?: () => string | undefined },
 ): SubagentPaneManager | undefined {
-	const detection = detectHerdr(env);
-	if (!detection) return undefined;
+	const multiplexer = createPaneMultiplexer(env);
+	if (!multiplexer) return undefined;
 	return new SubagentPaneManager({
-		herdr: new HerdrPaneControl({ bin: detection.bin }),
-		mainPaneId: detection.mainPaneId,
+		multiplexer,
 		cwd: ctx.cwd,
 		sessionId: ctx.getSessionId?.(),
 		socketRoot: tmpdir(),
-		viewerCommand: (sockPath) => `"${paneViewerRuntime()}" "${paneViewerPath()}" --socket "${sockPath}"`,
+		viewerArgv: (sockPath) => [paneViewerRuntime(), paneViewerPath(), "--socket", sockPath],
 		log: (message) => process.stderr.write(`[subagents] ${message}\n`),
 	});
 }
@@ -380,7 +382,7 @@ export default function (pi: ExtensionAPI) {
 		// subagent tool call. Config: ~/.pi/agent/configs/subagents.json.
 		const deps = makeDeps(ctx);
 		deps.scheduler = new SpawnScheduler(loadMaxConcurrent());
-		// ADR 0001: inside Herdr every spawn mirrors into a display-only subagent pane.
+		// ADR 0001: inside a supported multiplexer every spawn mirrors into a display-only subagent pane.
 		paneManager = paneManagerFor(process.env, {
 			cwd: ctx.cwd,
 			getSessionId: () => ctx.sessionManager?.getSessionId(),

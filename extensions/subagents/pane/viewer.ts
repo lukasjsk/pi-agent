@@ -1,13 +1,14 @@
 // viewer.ts — the pane viewer (ADR 0001): the read-only live view of one
 // subagent run inside a subagent pane. Launched by the orchestrator as
-// `<bun> viewer.ts --socket <sockPath>` inside a fresh Herdr pane. This file is
+// `<bun> viewer.ts --socket <sockPath>` inside a fresh multiplexer pane (Herdr
+// TUI or Herdr app). This file is
 // the thin I/O layer (socket, terminal, mouse, timers); all screen content is
 // computed by the pure functions in frame.ts. The viewer is not a pi session
 // and the pane is a display-only mirror: nothing here feeds back into the run.
 
 import { execFile } from "node:child_process";
 import { connect as netConnect, type Socket as NetSocket } from "node:net";
-import { buildPaneHeader, paneBody, truncateToWidth, visibleSlice, type FrameState } from "./frame.ts";
+import { buildPaneHeader, paneBody, paneTitle, truncateToWidth, visibleSlice, type FrameState } from "./frame.ts";
 import { decodePaneEvent, type PaneEvent } from "./protocol.ts";
 
 /** Connect retry cadence: every 500 ms, up to 20 attempts (10 s total). The
@@ -62,6 +63,15 @@ async function main(socketPath: string): Promise<void> {
 	}
 
 	const isTTY = Boolean(process.stdout.isTTY);
+
+	/** Set the terminal title so a multiplexer pane header can show the agent.
+	 *  The Herdr app's pane header reads this title; the Herdr TUI also gets the
+	 *  manager's pane rename. */
+	function setPaneTitle(agent: string, spawnId: string): void {
+		if (!isTTY) return;
+		process.stdout.write(`\x1b]2;${paneTitle(agent, spawnId)}\x07`);
+	}
+
 	const state: FrameState = { width: process.stdout.columns ?? 80 };
 	let offsetFromBottom = 0; // 0 = follow the tail
 	let closed = false;
@@ -160,9 +170,10 @@ async function main(socketPath: string): Promise<void> {
 		tick();
 	}
 
-	/** Close the Herdr pane, then exit. Without HERDR_PANE_ID there is no pane
-	 *  to close; the close attempt is guarded by a timeout so a stuck CLI can
-	 *  never hold the exit. */
+	/** Close the pane, then exit. The Herdr TUI needs an explicit close and
+	 *  identifies the pane by HERDR_PANE_ID; the Herdr app closes a pane when its
+	 *  program exits, so HC_TERMINAL_ID needs no command. The close attempt is
+	 *  guarded by a timeout so a stuck CLI can never hold the exit. */
 	async function finish(): Promise<void> {
 		const paneId = process.env.HERDR_PANE_ID;
 		if (paneId) {
@@ -185,8 +196,10 @@ async function main(socketPath: string): Promise<void> {
 
 	function handleEvent(event: PaneEvent): void {
 		if (event.type === "hello") {
-			// The agent name lives in the pane label (the manager's rename); the
-			// frame renders model/context/cost only. Redraw: the header gains task orientation.
+			// The agent name lives in the pane label (the TUI adapter's rename or
+			// this title); the frame renders model/context/cost only. Redraw: the
+			// header gains task orientation.
+			setPaneTitle(event.agent, event.spawnId);
 			onFrameChange(false);
 		} else if (event.type === "activity") {
 			state.activity = event;

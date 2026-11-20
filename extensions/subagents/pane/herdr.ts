@@ -1,13 +1,21 @@
-// herdr.ts — ADR 0001 Herdr pane control: detect the Herdr environment, place the
-// subagent panes, build the `herdr pane` argv (no shell, via the shared CliRunner
-// seam), and run the four best-effort pane operations. The pane is a display-only
-// mirror, so no operation here may throw into the spawn path: failures resolve as
-// "not done" and the manager decides what to log.
+// herdr.ts — ADR 0001 Herdr TUI pane adapter: detect the Herdr TUI environment,
+// provide the orchestrator's pane as the placement anchor, build the `herdr pane`
+// argv (no shell, via the shared CliRunner seam), and run the best-effort split →
+// rename → viewer chain. The pane is a display-only mirror, so no operation here
+// may throw into the spawn path: failures resolve as "not done" and the manager
+// decides what to log.
 
 import type { CliRunner } from "../cli.ts";
 import { createExecFileRunner } from "../cli.ts";
+import { toCommandLine } from "./command-line.ts";
+import type {
+	OpenedPane,
+	OpenPaneRequest,
+	PaneDirection,
+	PaneMultiplexer,
+} from "./multiplexer.ts";
 
-/** The Herdr env record: the only env keys the extension reads inside Herdr. */
+/** The Herdr TUI env record: the only env keys this adapter reads. */
 export interface HerdrEnv {
 	HERDR_ENV?: string;
 	HERDR_PANE_ID?: string;
@@ -15,33 +23,19 @@ export interface HerdrEnv {
 }
 
 /**
- * Detect that the orchestrator runs inside Herdr. Detected when this pane's own id
- * is known AND the Herdr env flag is set; the binary path falls back to the PATH
- * name. Pure function of the env record.
+ * Detect that the orchestrator runs inside the Herdr TUI. Detected when this pane's
+ * own id is known AND the Herdr env flag is set; the binary path falls back to the
+ * PATH name. Pure function of the env record.
  */
-export function detectHerdr(
+export function detectHerdrTui(
 	env: HerdrEnv,
-): { detected: boolean; bin: string; mainPaneId: string } | undefined {
+): { bin: string; mainPaneId: string } | undefined {
 	if (!env.HERDR_PANE_ID || env.HERDR_ENV !== "1") return undefined;
-	return { detected: true, bin: env.HERDR_BIN_PATH || "herdr", mainPaneId: env.HERDR_PANE_ID };
-}
-
-/**
- * Pane placement (GLOSSARY.md "Subagent pane"): the first spawn goes right of the
- * main pane; concurrent siblings stack vertically underneath the last opened
- * subagent pane. Pure function of the manager's placement state, which advances
- * only on successful splits.
- */
-export function splitTarget(
-	state: { lastSubagentPaneId: string | undefined },
-	mainPaneId: string,
-): { paneId: string; direction: "right" | "down" } {
-	if (state.lastSubagentPaneId === undefined) return { paneId: mainPaneId, direction: "right" };
-	return { paneId: state.lastSubagentPaneId, direction: "down" };
+	return { bin: env.HERDR_BIN_PATH || "herdr", mainPaneId: env.HERDR_PANE_ID };
 }
 
 /** argv for `herdr pane split` — the new pane opens beside/under the given pane. */
-export function paneSplitArgs(paneId: string, direction: "right" | "down", cwd: string): readonly string[] {
+export function paneSplitArgs(paneId: string, direction: PaneDirection, cwd: string): readonly string[] {
 	return ["pane", "split", paneId, "--direction", direction, "--cwd", cwd];
 }
 
@@ -78,30 +72,54 @@ export function parseSplitPaneId(stdout: string): string | undefined {
 }
 
 /**
- * The four best-effort `herdr pane` operations, in structural form: the manager
- * and its tests depend on this shape, not the class. Every method resolves
- * (never throws): split gives the new pane id or undefined; the rest give a
- * success boolean.
+ * The Herdr TUI adapter. `split`, `rename`, `run`, and `close` are public low-level
+ * operations for tests; the manager uses only the PaneMultiplexer surface (`open`,
+ * `close`, `anchor`). Every method resolves, never throws: split gives the new pane
+ * id or undefined; the rest give a success boolean.
  */
-export interface HerdrPaneOps {
-	split(paneId: string, direction: "right" | "down", cwd: string): Promise<string | undefined>;
-	run(paneId: string, command: string): Promise<boolean>;
-	rename(paneId: string, label: string): Promise<boolean>;
-	close(paneId: string): Promise<boolean>;
-}
-
-/** This layer swallows every failure — the manager decides what to log. */
-export class HerdrPaneControl implements HerdrPaneOps {
+export class HerdrTuiMultiplexer implements PaneMultiplexer {
+	readonly name = "herdr-tui";
 	private readonly bin: string;
+	private readonly mainPaneId: string;
 	private readonly runner: CliRunner;
 
-	constructor(opts: { bin: string; runner?: CliRunner }) {
+	constructor(opts: { bin: string; mainPaneId: string; runner?: CliRunner }) {
 		this.bin = opts.bin;
+		this.mainPaneId = opts.mainPaneId;
 		this.runner = opts.runner ?? createExecFileRunner(1 * 1024 * 1024);
 	}
 
+	/** The calling pane is the placement anchor; Herdr injects its id into the env. */
+	async anchor(): Promise<string | undefined> {
+		return this.mainPaneId;
+	}
+
+	/**
+	 * Split, rename, then run the viewer. A failed split is undefined; a failed
+	 * rename is a diagnostic; a failed viewer run returns a pane with
+	 * `viewerStarted: false`, so the manager can keep the server live for a later
+	 * viewer.
+	 */
+	async open(request: OpenPaneRequest): Promise<OpenedPane | undefined> {
+		const paneId = await this.split(request.target, request.direction, request.cwd);
+		if (paneId === undefined) return undefined;
+		const diagnostics: string[] = [];
+		if (!(await this.rename(paneId, request.label))) {
+			diagnostics.push(`pane rename failed for ${request.label}; the pane keeps its default label`);
+		}
+		const viewerStarted = await this.run(paneId, toCommandLine(request.viewer.argv));
+		if (!viewerStarted) {
+			diagnostics.push(`pane viewer start failed for ${request.label}; the pane stays viewerless`);
+		}
+		return {
+			paneId,
+			viewerStarted,
+			...(diagnostics.length > 0 ? { diagnostics } : {}),
+		};
+	}
+
 	/** Split a pane; resolves to the new pane id, or undefined on any failure. */
-	async split(paneId: string, direction: "right" | "down", cwd: string): Promise<string | undefined> {
+	async split(paneId: string, direction: PaneDirection, cwd: string): Promise<string | undefined> {
 		const result = await this.invoke(paneSplitArgs(paneId, direction, cwd));
 		if (!result || result.code !== 0) return undefined;
 		return parseSplitPaneId(result.stdout);
