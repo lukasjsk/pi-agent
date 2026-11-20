@@ -80,8 +80,9 @@ export class SubagentPaneManager {
 	 * the anchor lookup and split/viewer chain are fire-and-forget and never delay
 	 * the spawn. Placement: first spawn right of the orchestrator pane, later
 	 * spawns down of the last opened subagent pane; a failed split falls back to
-	 * one anchor right split, and if that fails too the server stops (the relay
-	 * no-ops).
+	 * one anchor right split, then to one fresh-anchor lookup and retry (an app
+	 * restart changes pane ids), and when that fails too the server stops (the
+	 * relay no-ops).
 	 */
 	open(agent: string, spawnId: string, task?: string): PaneRelay | undefined {
 		const sockPath = paneSocketPath({ root: this.opts.socketRoot, sessionId: this.opts.sessionId, spawnId });
@@ -213,9 +214,21 @@ export class SubagentPaneManager {
 			opened = await this.openAt(anchor, "right", agent, viewer);
 		}
 		if (opened === undefined) {
-			// No pane at all: the server stops and the relay no-ops. The spawn is
-			// untouched. Drop the cached anchor because a stale one (an app restart
-			// changes pane ids) may be the cause; the next spawn resolves it again.
+			// Both splits failed: a stale cached anchor (an app restart changes pane
+			// ids) may be the cause. Drop it, look the anchor up again, and when the
+			// fresh anchor is defined and different, retry exactly one anchor-right
+			// split so this spawn can still get its pane. No loop: one retry only.
+			this.anchorPaneId = undefined;
+			const freshAnchor = await this.resolveAnchor();
+			if (freshAnchor !== undefined && freshAnchor !== anchor) {
+				opened = await this.openAt(freshAnchor, "right", agent, viewer);
+			}
+		}
+		if (opened === undefined) {
+			// Still no pane at all: the server stops and the relay no-ops. The spawn is
+			// untouched. Clear the anchor cache even after the fresh retry, so the
+			// next spawn looks it up again (a later lookup may succeed when this one
+			// could not).
 			this.anchorPaneId = undefined;
 			log?.(`pane open failed for ${agent}; skipping the pane`);
 			this.stopEntry(entry);
@@ -225,10 +238,12 @@ export class SubagentPaneManager {
 		entry.paneId = opened.paneId;
 		this.lastSubagentPaneId = opened.paneId;
 		for (const message of opened.diagnostics ?? []) log?.(message);
-		if (!opened.viewerStarted) {
+		if (opened.viewerStart === "failed") {
 			// The pane exists but has no viewer. While the run is still live, keep
 			// the server alive so a viewer that attaches later still gets the stream;
 			// once settled, the backstop close has to happen (no viewer will come).
+			// An "unknown" viewer start needs no special handling: the normal settle
+			// path already schedules the backstop close.
 			if (entry.server.settled) this.schedulePaneClose(entry);
 		}
 	}

@@ -6,13 +6,14 @@
 // decides what to log.
 
 import type { CliRunner } from "../cli.ts";
-import { createExecFileRunner } from "../cli.ts";
 import { toCommandLine } from "./command-line.ts";
+import { asNonEmptyString, createCliInvoker, type CliResult, parseJson } from "./multiplexer-cli.ts";
 import type {
 	OpenedPane,
 	OpenPaneRequest,
 	PaneDirection,
 	PaneMultiplexer,
+	ViewerStart,
 } from "./multiplexer.ts";
 
 /** The Herdr TUI env record: the only env keys this adapter reads. */
@@ -60,15 +61,9 @@ export function paneCloseArgs(paneId: string): readonly string[] {
  * as failed and the pane stays skipped (the pane is best-effort, ADR 0001).
  */
 export function parseSplitPaneId(stdout: string): string | undefined {
-	let value: unknown;
-	try {
-		value = JSON.parse(stdout);
-	} catch {
-		return undefined;
-	}
+	const value = parseJson(stdout);
 	const pane = (value as { result?: { pane?: { pane_id?: unknown } } } | null)?.result?.pane;
-	const paneId = pane?.pane_id;
-	return typeof paneId === "string" && paneId.length > 0 ? paneId : undefined;
+	return asNonEmptyString(pane?.pane_id);
 }
 
 /**
@@ -79,14 +74,12 @@ export function parseSplitPaneId(stdout: string): string | undefined {
  */
 export class HerdrTuiMultiplexer implements PaneMultiplexer {
 	readonly name = "herdr-tui";
-	private readonly bin: string;
 	private readonly mainPaneId: string;
-	private readonly runner: CliRunner;
+	private readonly invoke: (args: readonly string[]) => Promise<CliResult | undefined>;
 
 	constructor(opts: { bin: string; mainPaneId: string; runner?: CliRunner }) {
-		this.bin = opts.bin;
 		this.mainPaneId = opts.mainPaneId;
-		this.runner = opts.runner ?? createExecFileRunner(1 * 1024 * 1024);
+		this.invoke = createCliInvoker(opts.bin, opts.runner);
 	}
 
 	/** The calling pane is the placement anchor; Herdr injects its id into the env. */
@@ -97,8 +90,8 @@ export class HerdrTuiMultiplexer implements PaneMultiplexer {
 	/**
 	 * Split, rename, then run the viewer. A failed split is undefined; a failed
 	 * rename is a diagnostic; a failed viewer run returns a pane with
-	 * `viewerStarted: false`, so the manager can keep the server live for a later
-	 * viewer.
+	 * `viewerStart: "failed"`, so the manager can keep the server live for a
+	 * later viewer.
 	 */
 	async open(request: OpenPaneRequest): Promise<OpenedPane | undefined> {
 		const paneId = await this.split(request.target, request.direction, request.cwd);
@@ -107,13 +100,14 @@ export class HerdrTuiMultiplexer implements PaneMultiplexer {
 		if (!(await this.rename(paneId, request.label))) {
 			diagnostics.push(`pane rename failed for ${request.label}; the pane keeps its default label`);
 		}
-		const viewerStarted = await this.run(paneId, toCommandLine(request.viewer.argv));
-		if (!viewerStarted) {
+		const viewerStart: ViewerStart =
+			(await this.run(paneId, toCommandLine(request.viewer.argv))) ? "started" : "failed";
+		if (viewerStart === "failed") {
 			diagnostics.push(`pane viewer start failed for ${request.label}; the pane stays viewerless`);
 		}
 		return {
 			paneId,
-			viewerStarted,
+			viewerStart,
 			...(diagnostics.length > 0 ? { diagnostics } : {}),
 		};
 	}
@@ -138,14 +132,5 @@ export class HerdrTuiMultiplexer implements PaneMultiplexer {
 	/** Close the pane. */
 	async close(paneId: string): Promise<boolean> {
 		return (await this.invoke(paneCloseArgs(paneId)))?.code === 0;
-	}
-
-	private async invoke(args: readonly string[]): Promise<{ stdout: string; code: number } | undefined> {
-		try {
-			const result = await this.runner.run(this.bin, args, undefined);
-			return { stdout: result.stdout, code: result.code };
-		} catch {
-			return undefined;
-		}
 	}
 }

@@ -66,7 +66,7 @@ function fakeMux(over: FakeMuxOptions = {}): {
 				if (over.failSplit) return undefined;
 				return {
 					paneId: `fake:p${next++}`,
-					viewerStarted: !over.viewerFails,
+					viewerStart: over.viewerFails ? "failed" : "started",
 					...(over.labelDiagnostic ? { diagnostics: ["pane rename failed for scout"] } : {}),
 				};
 			},
@@ -252,14 +252,63 @@ test("a failed split falls back to splitting the anchor right, then the relay no
 		200,
 	);
 	assert.equal(client, undefined, "no viewer can reach a skipped pane");
-	// A later spawn still targets the anchor right (state did not advance).
+	// A later spawn still targets the anchor right (state did not advance). The
+	// recovery lookup found the same anchor: unchanged means no third split.
+	assert.equal(state.anchors, 2, "the anchor is looked up again after both splits fail");
+	assert.equal(state.opens.length, 2, "no retry split: the fresh anchor was unchanged");
 	manager.open("scout", "scout-cd34")!;
 	await settleChain();
 	const last = state.opens[state.opens.length - 1];
 	assert.equal(last.target, "w1:p1");
 	assert.equal(last.direction, "right");
-	assert.equal(state.anchors, 2, "the anchor is re-resolved after the failed chain");
+	assert.equal(state.anchors, 4, "each failed chain resolves the anchor twice and clears the cache");
+	assert.equal(state.opens.length, 4, "the second failed chain also stops after two splits");
 	manager.closeAll();
+	await rm(root, { recursive: true, force: true });
+});
+
+test("a stale anchor recovers on the first spawn: the fresh anchor is retried right once", async () => {
+	const root = await makeTempRoot();
+	const anchors = ["stale", "fresh"];
+	const opens: { target: string; direction: PaneDirection }[] = [];
+	const closes: string[] = [];
+	let anchorCalls = 0;
+	let next = 1;
+	const multiplexer: PaneMultiplexer = {
+		name: "fake",
+		async anchor() {
+			// An app restart: the cached pane id is stale, the fresh lookup differs.
+			return anchors[Math.min(anchorCalls++, anchors.length - 1)];
+		},
+		async open(request: OpenPaneRequest): Promise<OpenedPane | undefined> {
+			opens.push({ target: request.target, direction: request.direction });
+			if (request.target === "stale") return undefined; // the old pane id is gone
+			return { paneId: `fresh:p${next++}`, viewerStart: "started" };
+		},
+		async close(paneId: string) {
+			closes.push(paneId);
+			return true;
+		},
+	};
+	const manager = makeManager(root, multiplexer);
+	manager.open("worker", "worker-ab12");
+	await settleChain();
+	assert.equal(anchorCalls, 2, "the anchor is resolved once, then looked up again after both splits failed");
+	assert.deepEqual(
+		opens,
+		[
+			{ target: "stale", direction: "right" },
+			{ target: "stale", direction: "right" },
+			{ target: "fresh", direction: "right" },
+		],
+		"three attempts: the placement split, the anchor-right fallback, the fresh-anchor retry",
+	);
+	const last = opens[opens.length - 1];
+	assert.equal(last.target, "fresh");
+	assert.equal(last.direction, "right");
+	// The retry succeeded: the pane is recorded, so closeAll closes it.
+	manager.closeAll();
+	assert.deepEqual(closes, ["fresh:p1"], "the recovered pane is recorded and closed");
 	await rm(root, { recursive: true, force: true });
 });
 

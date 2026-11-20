@@ -7,7 +7,7 @@
 // runs for a pane whose viewer never attached.
 
 import type { CliRunner } from "../cli.ts";
-import { createExecFileRunner } from "../cli.ts";
+import { asNonEmptyString, createCliInvoker, type CliResult, parseJson } from "./multiplexer-cli.ts";
 import type {
 	OpenedPane,
 	OpenPaneRequest,
@@ -74,12 +74,7 @@ export function appListArgs(): readonly string[] {
  * undefined on malformed JSON or no match — the spawn then opens no pane.
  */
 export function parseTerminalPaneId(stdout: string, terminalId: string): string | undefined {
-	let value: unknown;
-	try {
-		value = JSON.parse(stdout);
-	} catch {
-		return undefined;
-	}
+	const value = parseJson(stdout);
 	const spaces = (value as { spaces?: unknown } | null)?.spaces;
 	if (!Array.isArray(spaces)) return undefined;
 	for (const space of spaces) {
@@ -91,7 +86,8 @@ export function parseTerminalPaneId(stdout: string, terminalId: string): string 
 			for (const terminal of terminals) {
 				const record = terminal as { terminal?: unknown; pane?: unknown } | null;
 				if (record?.terminal !== terminalId) continue;
-				if (typeof record.pane === "string" && record.pane.length > 0) return record.pane;
+				const paneId = asNonEmptyString(record.pane);
+				if (paneId !== undefined) return paneId;
 			}
 		}
 	}
@@ -104,14 +100,9 @@ export function parseTerminalPaneId(stdout: string, terminalId: string): string 
  * missing/non-string pane field — the split then counts as failed.
  */
 export function parseAppSplitPaneId(stdout: string): string | undefined {
-	let value: unknown;
-	try {
-		value = JSON.parse(stdout);
-	} catch {
-		return undefined;
-	}
+	const value = parseJson(stdout);
 	const pane = (value as { pane?: unknown } | null)?.pane;
-	return typeof pane === "string" && pane.length > 0 ? pane : undefined;
+	return asNonEmptyString(pane);
 }
 
 /**
@@ -121,14 +112,12 @@ export function parseAppSplitPaneId(stdout: string): string | undefined {
  */
 export class HerdrAppMultiplexer implements PaneMultiplexer {
 	readonly name = "herdr-app";
-	private readonly bin: string;
 	private readonly terminalId: string;
-	private readonly runner: CliRunner;
+	private readonly invoke: (args: readonly string[]) => Promise<CliResult | undefined>;
 
 	constructor(opts: { bin: string; terminalId: string; runner?: CliRunner }) {
-		this.bin = opts.bin;
 		this.terminalId = opts.terminalId;
-		this.runner = opts.runner ?? createExecFileRunner(1 * 1024 * 1024);
+		this.invoke = createCliInvoker(opts.bin, opts.runner);
 	}
 
 	/** The orchestrator's pane, found from its terminal address in `herdr-app ls`. */
@@ -141,28 +130,21 @@ export class HerdrAppMultiplexer implements PaneMultiplexer {
 	/**
 	 * Split the target pane and start the viewer as its argv. The app has no cwd
 	 * argument on pane.split; the viewer uses absolute paths, so this is harmless.
-	 * A successful split is reported as `viewerStarted: true`; a viewer that exits
-	 * immediately closes its own pane (the app's normal terminal-exit behavior).
+	 * The app gives no way to observe whether the viewer process started, so a
+	 * successful split is reported as `viewerStart: "unknown"`; a viewer that
+	 * exits immediately closes its own pane (the app's normal terminal-exit
+	 * behavior).
 	 */
 	async open(request: OpenPaneRequest): Promise<OpenedPane | undefined> {
 		const result = await this.invoke(appSplitArgs(request.target, request.direction, request.viewer.argv));
 		if (!result || result.code !== 0) return undefined;
 		const paneId = parseAppSplitPaneId(result.stdout);
 		if (paneId === undefined) return undefined;
-		return { paneId, viewerStarted: true };
+		return { paneId, viewerStart: "unknown" };
 	}
 
 	/** Close the pane (best-effort; a pane whose viewer exited is already gone). */
 	async close(paneId: string): Promise<boolean> {
 		return (await this.invoke(appCloseArgs(paneId)))?.code === 0;
-	}
-
-	private async invoke(args: readonly string[]): Promise<{ stdout: string; code: number } | undefined> {
-		try {
-			const result = await this.runner.run(this.bin, args, undefined);
-			return { stdout: result.stdout, code: result.code };
-		} catch {
-			return undefined;
-		}
 	}
 }

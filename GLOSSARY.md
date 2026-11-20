@@ -75,7 +75,7 @@ The terminal multiplexer that hosts subagent panes: the Herdr TUI or the Herdr d
 _Avoid_: terminal manager, window manager, pane backend
 
 **Subagent pane**:
-A pane in the orchestrator's pane multiplexer dedicated to one subagent run, hosting its pane viewer. Display-only: the main session row stays the canonical record of the run. Placement: first spawn goes to the right of the main pane; concurrent siblings stack vertically underneath each other in that column.
+A pane in the orchestrator's pane multiplexer dedicated to one subagent run, hosting its pane viewer. Display-only: the main session row stays the canonical record of the run. Placement: first spawn goes to the right of the orchestrator pane; concurrent siblings stack vertically underneath each other in that column.
 _Avoid_: agent window, agent panel, task terminal
 
 **Pane viewer**:

@@ -137,7 +137,7 @@ test("open runs split, rename, then the viewer as one quoted command line", asyn
 		label: "worker",
 		viewer,
 	});
-	assert.deepEqual(opened, { paneId: "w1:p7", viewerStarted: true });
+	assert.deepEqual(opened, { paneId: "w1:p7", viewerStart: "started" });
 	assert.equal(calls.length, 3);
 	assert.equal(calls[0].bin, "/opt/herdr/bin/herdr");
 	assert.deepEqual(calls[0].args, ["pane", "split", "w1:p1", "--direction", "right", "--cwd", "/tmp/w"]);
@@ -179,13 +179,13 @@ test("open reports a failed rename as a diagnostic but still starts the viewer",
 		viewer,
 	});
 	assert.equal(opened?.paneId, "w1:p7");
-	assert.equal(opened?.viewerStarted, true);
+	assert.equal(opened?.viewerStart, "started");
 	assert.equal(opened?.diagnostics?.length, 1);
 	assert.match(String(opened?.diagnostics?.[0]), /rename failed/);
 	assert.equal(calls.length, 3);
 });
 
-test("open reports a failed viewer run with viewerStarted false so the manager can keep the server live", async () => {
+test("open reports a failed viewer run with viewerStart 'failed' so the manager can keep the server live", async () => {
 	const { runner } = fakeRunner([
 		{ stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p7" } } }), stderr: "", code: 0 },
 		{ stdout: "", stderr: "", code: 0 },
@@ -200,7 +200,7 @@ test("open reports a failed viewer run with viewerStarted false so the manager c
 		viewer,
 	});
 	assert.equal(opened?.paneId, "w1:p7");
-	assert.equal(opened?.viewerStarted, false);
+	assert.equal(opened?.viewerStart, "failed");
 	assert.match(String(opened?.diagnostics?.[0]), /viewer start failed/);
 });
 

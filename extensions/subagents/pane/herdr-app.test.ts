@@ -149,7 +149,7 @@ test("anchor is undefined when ls fails, is malformed, or the runner throws", as
 	);
 });
 
-test("open splits the target pane with the viewer argv and reports the new pane", async () => {
+test("open splits the target pane with the viewer argv and reports the pane with an unknown viewer start", async () => {
 	const { runner, calls } = fakeRunner([
 		{ stdout: JSON.stringify({ pane: "p9", terminal: "t9" }), stderr: "", code: 0 },
 	]);
@@ -161,7 +161,7 @@ test("open splits the target pane with the viewer argv and reports the new pane"
 		label: "worker",
 		viewer,
 	});
-	assert.deepEqual(opened, { paneId: "p9", viewerStarted: true });
+	assert.deepEqual(opened, { paneId: "p9", viewerStart: "unknown" });
 	assert.equal(calls.length, 1);
 	assert.equal(calls[0].bin, "/opt/herdr-app");
 	assert.deepEqual(calls[0].args, appSplitArgs("p8", "right", viewer.argv));

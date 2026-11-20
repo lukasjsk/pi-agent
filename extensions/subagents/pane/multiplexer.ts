@@ -27,14 +27,22 @@ export interface OpenPaneRequest {
 }
 
 /**
+ * Whether the adapter could observe the viewer process starting in the new
+ * pane. "failed" only when the adapter knows the viewer did not start.
+ */
+export type ViewerStart = "started" | "failed" | "unknown";
+
+/**
  * What an adapter reports after a split. `undefined` from open() means the split
- * itself failed; a result with `viewerStarted: false` means the pane exists but
- * the viewer did not start (the manager keeps the server live for a later viewer).
+ * itself failed; a result with `viewerStart: "failed"` means the pane exists but
+ * the viewer did not start (the manager keeps the server live for a later
+ * viewer); `"unknown"` means the adapter cannot observe the viewer (the Herdr
+ * app starts it as the new pane's argv).
  */
 export interface OpenedPane {
 	paneId: string;
-	/** False when the pane exists but the viewer process did not start. */
-	viewerStarted: boolean;
+	/** "failed" when the pane exists but the viewer process did not start. */
+	viewerStart: ViewerStart;
 	/** Adapter-side failures the manager logs; never thrown into the spawn path. */
 	diagnostics?: readonly string[];
 }
