@@ -44,11 +44,25 @@ interface RegisteredTool {
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: AskResultDetails }>;
 }
 
+interface EmittedEvent {
+	channel: string;
+	data: unknown;
+}
+
+const emittedEvents: EmittedEvent[] = [];
+let failEventEmit = false;
+
 function registerTool(): RegisteredTool {
 	let registered: RegisteredTool | undefined;
 	const pi = {
 		registerTool(tool: RegisteredTool) {
 			registered = tool;
+		},
+		events: {
+			emit(channel: string, data: unknown) {
+				if (failEventEmit) throw new Error("event bus unavailable");
+				emittedEvents.push({ channel, data });
+			},
 		},
 	} as unknown as ExtensionAPI;
 
@@ -250,4 +264,97 @@ test("multi-select mode can submit more than one option", async () => {
 		["Tests"],
 	);
 	assert.equal(result.content[0].text, "User selected:\n- 1. Tests");
+});
+
+async function withHerdrEnv<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
+	const previous = process.env.HERDR_ENV;
+	if (value === undefined) delete process.env.HERDR_ENV;
+	else process.env.HERDR_ENV = value;
+	try {
+		return await run();
+	} finally {
+		if (previous === undefined) delete process.env.HERDR_ENV;
+		else process.env.HERDR_ENV = previous;
+	}
+}
+
+test("reports blocked to herdr while the dialog waits and clears it afterwards", async () => {
+	emittedEvents.length = 0;
+
+	await withHerdrEnv("1", async () => {
+		await tool.execute(
+			"call-8",
+			{ question: "Choose a rollout\nstrategy", options: [{ label: "Blue-green" }] },
+			undefined,
+			undefined,
+			customComponentContext((component) => component.handleInput("enter")),
+		);
+	});
+
+	assert.deepEqual(emittedEvents, [
+		{ channel: "herdr:blocked", data: { active: true, label: "Choose a rollout strategy" } },
+		{ channel: "herdr:blocked", data: { active: false } },
+	]);
+});
+
+test("reports blocked around the free-form editor too", async () => {
+	emittedEvents.length = 0;
+
+	await withHerdrEnv("1", async () => {
+		await tool.execute(
+			"call-9",
+			{ question: "Which environment?" },
+			undefined,
+			undefined,
+			context({
+				ui: {
+					editor: async () => "staging",
+					custom: async () => undefined,
+				},
+			}),
+		);
+	});
+
+	assert.deepEqual(emittedEvents, [
+		{ channel: "herdr:blocked", data: { active: true, label: "Which environment?" } },
+		{ channel: "herdr:blocked", data: { active: false } },
+	]);
+});
+
+test("does not emit herdr events outside a herdr session", async () => {
+	emittedEvents.length = 0;
+
+	await withHerdrEnv(undefined, async () => {
+		await tool.execute(
+			"call-10",
+			{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
+			undefined,
+			undefined,
+			customComponentContext((component) => component.handleInput("enter")),
+		);
+	});
+
+	assert.deepEqual(emittedEvents, []);
+});
+
+test("a failing herdr emit never breaks the question flow", async () => {
+	emittedEvents.length = 0;
+	failEventEmit = true;
+	try {
+		const result = await withHerdrEnv("1", async () =>
+			tool.execute(
+				"call-11",
+				{ question: "Which environment?" },
+				undefined,
+				undefined,
+				context({
+					ui: { editor: async () => "staging", custom: async () => undefined },
+				}),
+			),
+		);
+		assert.equal(result.details.status, "answered");
+		assert.equal(result.content[0].text, "User answered: staging");
+	} finally {
+		failEventEmit = false;
+	}
 });

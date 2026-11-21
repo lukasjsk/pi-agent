@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-11-21
+
+### Fixed
+
+- `ask_user_question` now reports the Herdr pane as blocked while its dialog waits for an answer. Herdr's pi integration (`~/.pi/agent/extensions/herdr-agent-state.ts`, written by `herdr integration install pi`) keeps a pane in `working` until an extension emits `herdr:blocked`; nothing emitted it, so every question left the sidebar in `working`. The tool now emits `herdr:blocked` with `{ active: true, label: <question> }` before each dialog (`ctx.ui.editor`, and the single-select and multi-select `ctx.ui.custom` widgets) and `{ active: false }` after it, inside the shared UI lock so the pair stays balanced, including cancellation and `Other` answers. The emit is gated on `HERDR_ENV=1` — the same gate the integration uses — so outside Herdr it does nothing, and a throwing event bus can never change an answer. The suite covers the emitted pair, the editor path, the no-emit case outside Herdr, and a failing emitter.
+
 ## 2026-11-20
 
 ### Added

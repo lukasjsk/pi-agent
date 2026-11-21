@@ -565,6 +565,40 @@ function withUILock<T>(fn: () => Promise<T>): Promise<T> {
     return sharedUiLock.withLock(fn);
 }
 
+// Herdr shows a pane as "working" while a blocking dialog waits unless an
+// extension emits its `herdr:blocked` event; herdr's pi integration listens for
+// that event and reports the pane as blocked until the matching `active: false`.
+// Emit around every dialog this tool shows. Outside herdr no listener exists,
+// so the emit is a no-op, and it must never change or break the answer flow.
+const HERDR_BLOCKED_EVENT = "herdr:blocked";
+
+function herdrEnabled(): boolean {
+    // Same gate as herdr's pi integration: it reports nothing unless HERDR_ENV=1.
+    return process.env.HERDR_ENV === "1";
+}
+
+function herdrLabel(question: string): string {
+    return question.replace(/\s+/gu, " ").trim();
+}
+
+function emitHerdrBlocked(pi: ExtensionAPI, active: boolean, label?: string): void {
+    if (!herdrEnabled()) return;
+    try {
+        pi?.events?.emit?.(HERDR_BLOCKED_EVENT, active ? { active: true, label } : { active: false });
+    } catch {
+        // A status report must never break the question flow.
+    }
+}
+
+async function withHerdrBlocked<T>(pi: ExtensionAPI, label: string, run: () => Promise<T>): Promise<T> {
+    emitHerdrBlocked(pi, true, label);
+    try {
+        return await run();
+    } finally {
+        emitHerdrBlocked(pi, false);
+    }
+}
+
 export default function askUserQuestion(pi: ExtensionAPI) {
     pi.registerTool({
         name: "ask_user_question",
@@ -599,9 +633,11 @@ export default function askUserQuestion(pi: ExtensionAPI) {
             }
 
             return withUILock(async () => {
+                const label = herdrLabel(params.question);
+
                 if (mode === "text") {
                     const editorTitle = context ? `${params.question}\n\n${context}` : params.question;
-                    const answer = await ctx.ui.editor(editorTitle);
+                    const answer = await withHerdrBlocked(pi, label, () => ctx.ui.editor(editorTitle));
                     if (answer === undefined) {
                         return cancelledResult(params.question, mode, context);
                     }
@@ -611,14 +647,18 @@ export default function askUserQuestion(pi: ExtensionAPI) {
                 }
 
                 if (mode === "single-select") {
-                    const answer = await askSingleChoice(ctx, params.question, context, options);
+                    const answer = await withHerdrBlocked(pi, label, () =>
+                        askSingleChoice(ctx, params.question, context, options),
+                    );
                     if (!answer) {
                         return cancelledResult(params.question, mode, context);
                     }
                     return buildResult(params.question, context, mode, [answer]);
                 }
 
-                const answers = await askMultiChoice(ctx, params.question, context, options);
+                const answers = await withHerdrBlocked(pi, label, () =>
+                    askMultiChoice(ctx, params.question, context, options),
+                );
                 if (!answers) {
                     return cancelledResult(params.question, mode, context);
                 }
