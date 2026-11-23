@@ -49,13 +49,6 @@ interface RegisteredTool {
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: AskResultDetails }>;
 }
 
-interface EmittedEvent {
-	channel: string;
-	data: unknown;
-}
-
-const emittedEvents: EmittedEvent[] = [];
-let failEventEmit = false;
 // Text the fake `pi.exec` and the native clipboard fallback return. `null` means
 // "clipboard is empty": the exec stub exits non-zero and getText() returns null.
 let clipboardText: string | null = null;
@@ -73,12 +66,6 @@ function registerTool(): RegisteredTool {
 			killed: false,
 			truncated: false,
 		}),
-		events: {
-			emit(channel: string, data: unknown) {
-				if (failEventEmit) throw new Error("event bus unavailable");
-				emittedEvents.push({ channel, data });
-			},
-		},
 	} as unknown as ExtensionAPI;
 
 	askUserQuestion(pi);
@@ -87,6 +74,9 @@ function registerTool(): RegisteredTool {
 }
 
 const tool = registerTool();
+
+/** Options each `ctx.ui.custom` call received, in call order. */
+let uiCustomOptions: unknown[] = [];
 
 function context(overrides: Record<string, unknown> = {}): ExtensionContext {
 	return {
@@ -110,7 +100,8 @@ function customComponentContext(
 
 	return context({
 		ui: {
-			custom: async (factory: any) => {
+			custom: async (factory: any, options?: unknown) => {
+				uiCustomOptions.push(options);
 				let result: unknown;
 				const component = factory(tui, theme, keybindings, (value: unknown) => {
 					result = value;
@@ -502,94 +493,73 @@ test("multi-select inserts the clipboard text into Other", async () => {
 	});
 });
 
-async function withHerdrEnv<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
-	const previous = process.env.HERDR_ENV;
-	if (value === undefined) delete process.env.HERDR_ENV;
-	else process.env.HERDR_ENV = value;
-	try {
-		return await run();
-	} finally {
-		if (previous === undefined) delete process.env.HERDR_ENV;
-		else process.env.HERDR_ENV = previous;
-	}
+function blockedOption(message: string) {
+	return { blocked: { kind: "question", message } };
 }
 
-test("reports blocked to herdr while the dialog waits and clears it afterwards", async () => {
-	emittedEvents.length = 0;
+test("asks the terminal for a blocked status while a choice dialog waits", async () => {
+	uiCustomOptions = [];
 
-	await withHerdrEnv("1", async () => {
-		await tool.execute(
-			"call-8",
-			{ question: "Choose a rollout\nstrategy", options: [{ label: "Blue-green" }] },
-			undefined,
-			undefined,
-			customComponentContext((component) => component.handleInput("enter")),
-		);
-	});
+	await tool.execute(
+		"call-8",
+		{ question: "Choose a rollout\n  strategy", options: [{ label: "Blue-green" }] },
+		undefined,
+		undefined,
+		customComponentContext((component) => component.handleInput("enter")),
+	);
 
-	assert.deepEqual(emittedEvents, [
-		{ channel: "herdr:blocked", data: { active: true, label: "Choose a rollout strategy" } },
-		{ channel: "herdr:blocked", data: { active: false } },
-	]);
+	assert.deepEqual(uiCustomOptions, [blockedOption("Choose a rollout strategy")]);
 });
 
-test("reports blocked around the free-form editor too", async () => {
-	emittedEvents.length = 0;
+test("asks the terminal for a blocked status around the free-form editor too", async () => {
+	uiCustomOptions = [];
 
-	await withHerdrEnv("1", async () => {
-		await tool.execute(
-			"call-9",
-			{ question: "Which environment?" },
-			undefined,
-			undefined,
-			customComponentContext((component) => {
-				component.handleInput("staging");
-				component.handleInput("\r");
-			}),
-		);
-	});
+	await tool.execute(
+		"call-9",
+		{ question: "Which environment?" },
+		undefined,
+		undefined,
+		customComponentContext((component) => {
+			component.handleInput("staging");
+			component.handleInput("\r");
+		}),
+	);
 
-	assert.deepEqual(emittedEvents, [
-		{ channel: "herdr:blocked", data: { active: true, label: "Which environment?" } },
-		{ channel: "herdr:blocked", data: { active: false } },
-	]);
+	assert.deepEqual(uiCustomOptions, [blockedOption("Which environment?")]);
 });
 
-test("does not emit herdr events outside a herdr session", async () => {
-	emittedEvents.length = 0;
+test("asks the terminal for a blocked status in multi-select mode", async () => {
+	uiCustomOptions = [];
 
-	await withHerdrEnv(undefined, async () => {
-		await tool.execute(
-			"call-10",
-			{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
-			undefined,
-			undefined,
-			customComponentContext((component) => component.handleInput("enter")),
-		);
-	});
+	await tool.execute(
+		"call-10",
+		{ question: "Select checks", options: [{ label: "Tests" }], multiSelect: true },
+		undefined,
+		undefined,
+		customComponentContext((component) => {
+			component.handleInput("space");
+			component.handleInput("down");
+			component.handleInput("down");
+			component.handleInput("enter");
+		}),
+	);
 
-	assert.deepEqual(emittedEvents, []);
+	assert.deepEqual(uiCustomOptions, [blockedOption("Select checks")]);
 });
 
-test("a failing herdr emit never breaks the question flow", async () => {
-	emittedEvents.length = 0;
-	failEventEmit = true;
-	try {
-		const result = await withHerdrEnv("1", async () =>
-			tool.execute(
-				"call-11",
-				{ question: "Which environment?" },
-				undefined,
-				undefined,
-				customComponentContext((component) => {
-					component.handleInput("staging");
-					component.handleInput("\r");
-				}),
-			),
-		);
-		assert.equal(result.details.status, "answered");
-		assert.equal(result.content[0].text, "User answered: staging");
-	} finally {
-		failEventEmit = false;
-	}
+test("falls back to a fixed blocked message for an empty question", async () => {
+	uiCustomOptions = [];
+
+	await tool.execute(
+		"call-11",
+		{ question: "   " },
+		undefined,
+		undefined,
+		customComponentContext((component) => {
+			component.handleInput("staging");
+			component.handleInput("\r");
+		}),
+	);
+
+	assert.deepEqual(uiCustomOptions, [blockedOption("Waiting for your answer")]);
 });

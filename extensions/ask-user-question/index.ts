@@ -273,7 +273,7 @@ async function askText(
             },
             handleInput,
         };
-    }, { blocked: { kind: "question", message: question } });
+    }, blockedOption(question));
 }
 
 function formatAnswerForModel(answer: AskAnswer): string {
@@ -520,7 +520,7 @@ async function askSingleChoice(
             },
             handleInput,
         };
-    });
+    }, blockedOption(question));
 }
 
 async function askMultiChoice(
@@ -765,7 +765,7 @@ async function askMultiChoice(
             },
             handleInput,
         };
-    });
+    }, blockedOption(question));
 }
 
 // Shared UI mutex. ctx.ui.custom()/editor can only handle one active call at
@@ -795,38 +795,15 @@ function withUILock<T>(fn: () => Promise<T>): Promise<T> {
     return sharedUiLock.withLock(fn);
 }
 
-// Herdr shows a pane as "working" while a blocking dialog waits unless an
-// extension emits its `herdr:blocked` event; herdr's pi integration listens for
-// that event and reports the pane as blocked until the matching `active: false`.
-// Emit around every dialog this tool shows. Outside herdr no listener exists,
-// so the emit is a no-op, and it must never change or break the answer flow.
-const HERDR_BLOCKED_EVENT = "herdr:blocked";
+// A terminal that implements OSC 7501 program status (herdr-core, for example)
+// shows this pane as "blocked" only when Pi reports it. `ctx.ui.custom` reports
+// it while the component waits for input when the caller passes `blocked`, so
+// every dialog this tool shows passes one. Terminals without OSC 7501 ignore it.
+const DEFAULT_BLOCKED_MESSAGE = "Waiting for your answer";
 
-function herdrEnabled(): boolean {
-    // Same gate as herdr's pi integration: it reports nothing unless HERDR_ENV=1.
-    return process.env.HERDR_ENV === "1";
-}
-
-function herdrLabel(question: string): string {
-    return question.replace(/\s+/gu, " ").trim();
-}
-
-function emitHerdrBlocked(pi: ExtensionAPI, active: boolean, label?: string): void {
-    if (!herdrEnabled()) return;
-    try {
-        pi?.events?.emit?.(HERDR_BLOCKED_EVENT, active ? { active: true, label } : { active: false });
-    } catch {
-        // A status report must never break the question flow.
-    }
-}
-
-async function withHerdrBlocked<T>(pi: ExtensionAPI, label: string, run: () => Promise<T>): Promise<T> {
-    emitHerdrBlocked(pi, true, label);
-    try {
-        return await run();
-    } finally {
-        emitHerdrBlocked(pi, false);
-    }
+function blockedOption(question: string): { blocked: { kind: "question"; message: string } } {
+    const message = question.replace(/\s+/gu, " ").trim();
+    return { blocked: { kind: "question", message: message || DEFAULT_BLOCKED_MESSAGE } };
 }
 
 export default function askUserQuestion(pi: ExtensionAPI) {
@@ -863,10 +840,8 @@ export default function askUserQuestion(pi: ExtensionAPI) {
             }
 
             return withUILock(async () => {
-                const label = herdrLabel(params.question);
-
                 if (mode === "text") {
-                    const answer = await withHerdrBlocked(pi, label, () => askText(ctx, pi, params.question, context));
+                    const answer = await askText(ctx, pi, params.question, context);
                     if (answer === undefined) {
                         return cancelledResult(params.question, mode, context);
                     }
@@ -876,18 +851,14 @@ export default function askUserQuestion(pi: ExtensionAPI) {
                 }
 
                 if (mode === "single-select") {
-                    const answer = await withHerdrBlocked(pi, label, () =>
-                        askSingleChoice(ctx, pi, params.question, context, options),
-                    );
+                    const answer = await askSingleChoice(ctx, pi, params.question, context, options);
                     if (!answer) {
                         return cancelledResult(params.question, mode, context);
                     }
                     return buildResult(params.question, context, mode, [answer]);
                 }
 
-                const answers = await withHerdrBlocked(pi, label, () =>
-                    askMultiChoice(ctx, pi, params.question, context, options),
-                );
+                const answers = await askMultiChoice(ctx, pi, params.question, context, options);
                 if (!answers) {
                     return cancelledResult(params.question, mode, context);
                 }
