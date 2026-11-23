@@ -93,6 +93,12 @@ export function installTypeboxMock(): void {
 	}));
 }
 
+/**
+ * Controllable text for the pi-tui native clipboard fallback, driven by the
+ * ask-user-question suite (Wayland/X11 command paths use the pi mock's exec).
+ */
+export const clipboardHooks: { text: string | null } = { text: null };
+
 // Same story for @earendil-works/pi-tui: footer needs width helpers, subagents needs
 // the Text component. One shape for the whole repo.
 export const piTuiMock = {
@@ -107,6 +113,7 @@ export const piTuiMock = {
 		space: "space",
 		escape: "escape",
 	},
+	getNativeClipboard: () => ({ getText: async () => clipboardHooks.text }),
 	Editor: class {
 		private text = "";
 		onSubmit?: (value: string) => void;
@@ -117,11 +124,20 @@ export const piTuiMock = {
 			this.text = text;
 		}
 
+		insertTextAtCursor(text: string) {
+			this.text += text;
+		}
+
 		handleInput(data: string) {
+			const pasteStart = "\x1b[200~";
+			const pasteEnd = "\x1b[201~";
 			if (data === "\r" || data === "\n") {
 				this.onSubmit?.(this.text);
 			} else if (data === "\x7f") {
 				this.text = this.text.slice(0, -1);
+			} else if (data.startsWith(pasteStart) && data.endsWith(pasteEnd)) {
+				// Bracketed paste: append only the inner text, strip both markers.
+				this.text += data.slice(pasteStart.length, data.length - pasteEnd.length);
 			} else {
 				this.text += data;
 			}

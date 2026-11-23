@@ -8,6 +8,10 @@ This log records notable functionality added to this configuration repository. S
 
 - Past prompts in [`extensions/cc-ui/`](extensions/cc-ui) no longer sit in a background band. The extension stops painting the theme's `userMessageBg` behind a user message and drops that fill from the markdown's own style copy, so a prompt now renders on the terminal's background like the assistant messages and the tool rows around it; only the `❯` marker at column 1 and the three-column text alignment stay, so prompts still line up with the tool rows' `●` and labels. The reason: the full-width band made a long transcript look striped, and it had to repaint itself after every reset inside a line (`withUserBand`), which was fragile once themed markdown put its own colors and resets in the text.
 
+### Fixed
+
+- `ask_user_question` now accepts a dictated transcript in all of its dialogs. Hex on Linux does not type: it puts the transcript on the clipboard and sends Ctrl+V (`hex::linux::paste`, with `paste_with_shift` off). Pi's main prompt inserts that keystroke because its composer binds `app.clipboard.pasteImage` (Ctrl+V) to a clipboard read, but the tool's dialogs used bare pi-tui `Editor` components, which insert only from a terminal bracketed paste, so a dictated answer was silently dropped and the transcript stayed on the clipboard. The text-mode question no longer calls `ctx.ui.editor`: `askText` is a custom component that owns the same keybinding, the picker dialogs insert the clipboard into their "Other" field, and a paste while the option list has focus opens "Other" first so the words cannot land nowhere. The clipboard is read the way Pi reads it (`wl-paste`, then `xclip`/`xsel`, then the native helper), trimmed of the newline xclip keeps, and rejected when it decodes to control characters. The text dialog now propagates focus to its editor, so the hardware cursor works, and it reports `blocked: { kind: "question" }` so Pi still shows the program status. The suite covers text mode, the "Other" field, a paste while the list has focus, a bracketed paste, a configured keybinding, an empty clipboard, and binary noise.
+
 ## 2026-11-21
 
 ### Fixed

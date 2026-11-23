@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { installPiCodingAgentMock, installPiTuiMock, installTypeboxMock } from "../test/pi-mock.ts";
+import {
+	clipboardHooks,
+	installPiCodingAgentMock,
+	installPiTuiMock,
+	installTypeboxMock,
+} from "../test/pi-mock.ts";
 
 installPiCodingAgentMock();
 installPiTuiMock();
@@ -51,6 +56,9 @@ interface EmittedEvent {
 
 const emittedEvents: EmittedEvent[] = [];
 let failEventEmit = false;
+// Text the fake `pi.exec` and the native clipboard fallback return. `null` means
+// "clipboard is empty": the exec stub exits non-zero and getText() returns null.
+let clipboardText: string | null = null;
 
 function registerTool(): RegisteredTool {
 	let registered: RegisteredTool | undefined;
@@ -58,6 +66,13 @@ function registerTool(): RegisteredTool {
 		registerTool(tool: RegisteredTool) {
 			registered = tool;
 		},
+		exec: async (_command: string, _args: string[]) => ({
+			stdout: clipboardText ?? "",
+			stderr: "",
+			code: clipboardText === null ? 1 : 0,
+			killed: false,
+			truncated: false,
+		}),
 		events: {
 			emit(channel: string, data: unknown) {
 				if (failEventEmit) throw new Error("event bus unavailable");
@@ -77,14 +92,16 @@ function context(overrides: Record<string, unknown> = {}): ExtensionContext {
 	return {
 		hasUI: true,
 		ui: {
-			editor: async () => undefined,
 			custom: async () => undefined,
 		},
 		...overrides,
 	} as unknown as ExtensionContext;
 }
 
-function customComponentContext(drive: (component: any) => void): ExtensionContext {
+function customComponentContext(
+	drive: (component: any) => void | Promise<void>,
+	keybindings: unknown = () => {},
+): ExtensionContext {
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
@@ -93,17 +110,44 @@ function customComponentContext(drive: (component: any) => void): ExtensionConte
 
 	return context({
 		ui: {
-			editor: async () => undefined,
 			custom: async (factory: any) => {
 				let result: unknown;
-				const component = factory(tui, theme, () => {}, (value: unknown) => {
+				const component = factory(tui, theme, keybindings, (value: unknown) => {
 					result = value;
 				});
-				drive(component);
+				await drive(component);
 				return result;
 			},
 		},
 	});
+}
+
+/** Let an async clipboard read finish before the next key arrives. */
+async function settle(): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+/**
+ * Set the clipboard for one test. Wayland is forced on so the implementation's
+ * wl-paste path answers from the fake `pi.exec`; the native helper sees the same
+ * text through `clipboardHooks`.
+ */
+async function withClipboard<T>(text: string | null, run: () => Promise<T>): Promise<T> {
+	const previousText = clipboardText;
+	const previousHooks = clipboardHooks.text;
+	const previousWayland = process.env.WAYLAND_DISPLAY;
+
+	clipboardText = text;
+	clipboardHooks.text = text;
+	process.env.WAYLAND_DISPLAY = "wayland-test";
+	try {
+		return await run();
+	} finally {
+		clipboardText = previousText;
+		clipboardHooks.text = previousHooks;
+		if (previousWayland === undefined) delete process.env.WAYLAND_DISPLAY;
+		else process.env.WAYLAND_DISPLAY = previousWayland;
+	}
 }
 
 test("registers the ask_user_question tool with a TypeBox parameter schema", () => {
@@ -120,10 +164,6 @@ test("returns a structured cancelled result when the signal is already aborted",
 	const ctx = context({
 		hasUI: true,
 		ui: {
-			editor: async () => {
-				uiAccessed = true;
-				return undefined;
-			},
 			custom: async () => {
 				uiAccessed = true;
 				return undefined;
@@ -153,15 +193,12 @@ test("returns a structured unavailable result without interactive UI", async () 
 });
 
 test("free-form mode delegates to the editor and returns the trimmed answer", async () => {
-	const editorCalls: string[] = [];
-	const ctx = context({
-		ui: {
-			editor: async (title: string) => {
-				editorCalls.push(title);
-				return "  staging  ";
-			},
-			custom: async () => undefined,
-		},
+	let rendered = "";
+	const ctx = customComponentContext((component) => {
+		component.handleInput("  staging  ");
+		// Render while the dialog is still open: the question and details must be visible.
+		rendered = component.render(80).join("\n");
+		component.handleInput("\r");
 	});
 
 	const result = await tool.execute(
@@ -172,7 +209,8 @@ test("free-form mode delegates to the editor and returns the trimmed answer", as
 		ctx,
 	);
 
-	assert.deepEqual(editorCalls, ["Which environment?\n\nChoose the deployment target"]);
+	assert.match(rendered, /Which environment\?/);
+	assert.match(rendered, /Choose the deployment target/);
 	assert.equal(result.details.status, "answered");
 	assert.equal(result.details.mode, "text");
 	assert.deepEqual(result.details.answers, [{ type: "text", label: "staging", value: "staging" }]);
@@ -180,17 +218,121 @@ test("free-form mode delegates to the editor and returns the trimmed answer", as
 });
 
 test("free-form cancellation returns a structured cancelled result", async () => {
-	const ctx = context({
-		ui: {
-			editor: async () => undefined,
-			custom: async () => undefined,
-		},
-	});
-
-	const result = await tool.execute("call-4", { question: "Explain the blocker" }, undefined, undefined, ctx);
+	const result = await tool.execute(
+		"call-4",
+		{ question: "Explain the blocker" },
+		undefined,
+		undefined,
+		customComponentContext((component) => {
+			component.handleInput("escape");
+		}),
+	);
 
 	assert.equal(result.details.status, "cancelled");
 	assert.equal(result.details.answers.length, 0);
+});
+
+test("free-form mode inserts the clipboard text on Ctrl+V", async () => {
+	const result = await withClipboard("dictated words", async () =>
+		tool.execute(
+			"call-12",
+			{ question: "Which environment?" },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("\r");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.equal(result.details.mode, "text");
+	assert.equal(result.details.answers.length, 1);
+	assert.equal(result.details.answers[0].label, "dictated words");
+	assert.equal(result.content[0].text, "User answered: dictated words");
+});
+
+test("free-form mode trims the newline that xclip keeps on the clipboard", async () => {
+	const result = await withClipboard("dictated words\n", async () =>
+		tool.execute(
+			"call-18",
+			{ question: "Which environment?" },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("\r");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.deepEqual(result.details.answers, [{ type: "text", label: "dictated words", value: "dictated words" }]);
+});
+
+test("free-form mode ignores an empty clipboard", async () => {
+	const result = await withClipboard(null, async () =>
+		tool.execute(
+			"call-13",
+			{ question: "Which environment?" },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("escape");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "cancelled");
+	assert.equal(result.details.answers.length, 0);
+	assert.equal(result.content[0].text, "User cancelled the question");
+});
+
+test("free-form mode ignores a clipboard that decodes to binary noise", async () => {
+	const result = await withClipboard("\u0001\u0002binary", async () =>
+		tool.execute(
+			"call-19",
+			{ question: "Which environment?" },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("escape");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "cancelled");
+});
+
+test("single-select honors the configured paste keybinding", async () => {
+	const keybindings = {
+		matches: (data: string, action: string) => action === "app.clipboard.pasteImage" && data === "alt+v",
+	};
+	const result = await withClipboard("dictated words", async () =>
+		tool.execute(
+			"call-20",
+			{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("alt+v");
+				await settle();
+				component.handleInput("\r");
+			}, keybindings),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.deepEqual(result.details.answers, [
+		{ type: "other", label: "dictated words", value: "dictated words" },
+	]);
 });
 
 test("single-select mode returns the normalized selected option", async () => {
@@ -238,6 +380,69 @@ test("single-select mode accepts a custom Other answer", async () => {
 	assert.equal(result.content[0].text, "User selected: Other: custom");
 });
 
+test("single-select asks Other and inserts the clipboard text", async () => {
+	const result = await withClipboard("dictated words", async () =>
+		tool.execute(
+			"call-14",
+			{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("down"); // Other
+				component.handleInput("enter");
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("\r");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.equal(result.details.mode, "single-select");
+	assert.deepEqual(result.details.answers, [
+		{ type: "other", label: "dictated words", value: "dictated words" },
+	]);
+});
+
+test("single-select pastes into Other while the list has focus", async () => {
+	const result = await withClipboard("dictated words", async () =>
+		tool.execute(
+			"call-15",
+			{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("\r");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.deepEqual(result.details.answers, [
+		{ type: "other", label: "dictated words", value: "dictated words" },
+	]);
+});
+
+test("single-select accepts a bracketed paste in the list", async () => {
+	const result = await tool.execute(
+		"call-16",
+		{ question: "Choose a rollout strategy", options: [{ label: "Blue-green" }] },
+		undefined,
+		undefined,
+		customComponentContext((component) => {
+			component.handleInput("\x1b[200~dictated words\x1b[201~");
+			component.handleInput("\r");
+		}),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.deepEqual(result.details.answers, [
+		{ type: "other", label: "dictated words", value: "dictated words" },
+	]);
+});
+
 test("multi-select mode can submit more than one option", async () => {
 	const result = await tool.execute(
 		"call-7",
@@ -264,6 +469,37 @@ test("multi-select mode can submit more than one option", async () => {
 		["Tests"],
 	);
 	assert.equal(result.content[0].text, "User selected:\n- 1. Tests");
+});
+
+test("multi-select inserts the clipboard text into Other", async () => {
+	const result = await withClipboard("dictated words", async () =>
+		tool.execute(
+			"call-17",
+			{ question: "Select checks", options: [{ label: "Tests" }], multiSelect: true },
+			undefined,
+			undefined,
+			customComponentContext(async (component) => {
+				component.handleInput("ctrl+v");
+				await settle();
+				component.handleInput("\r"); // save Other
+				component.handleInput("down"); // Other
+				component.handleInput("down"); // Submit
+				component.handleInput("enter");
+			}),
+		),
+	);
+
+	assert.equal(result.details.status, "answered");
+	assert.equal(result.details.mode, "multi-select");
+	assert.deepEqual(
+		result.details.answers.map((answer) => answer.label),
+		["dictated words"],
+	);
+	assert.deepEqual(result.details.answers[0], {
+		type: "other",
+		label: "dictated words",
+		value: "dictated words",
+	});
 });
 
 async function withHerdrEnv<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
@@ -306,11 +542,9 @@ test("reports blocked around the free-form editor too", async () => {
 			{ question: "Which environment?" },
 			undefined,
 			undefined,
-			context({
-				ui: {
-					editor: async () => "staging",
-					custom: async () => undefined,
-				},
+			customComponentContext((component) => {
+				component.handleInput("staging");
+				component.handleInput("\r");
 			}),
 		);
 	});
@@ -347,8 +581,9 @@ test("a failing herdr emit never breaks the question flow", async () => {
 				{ question: "Which environment?" },
 				undefined,
 				undefined,
-				context({
-					ui: { editor: async () => "staging", custom: async () => undefined },
+				customComponentContext((component) => {
+					component.handleInput("staging");
+					component.handleInput("\r");
 				}),
 			),
 		);

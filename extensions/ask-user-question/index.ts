@@ -4,6 +4,7 @@ import {
     type EditorTheme,
     Key,
     Text,
+    getNativeClipboard,
     matchesKey,
     truncateToWidth,
     wrapTextWithAnsi,
@@ -124,6 +125,157 @@ function addWrapped(lines: string[], text: string, width: number, indent = ""): 
     }
 }
 
+const PASTE_KEYBINDING = "app.clipboard.pasteImage";
+const BRACKETED_PASTE_START = "\x1b[200~";
+
+async function runClipboardCommand(pi: ExtensionAPI, command: string, args: string[]): Promise<string | null> {
+    try {
+        const result = await pi.exec(command, args, { timeout: 5000 });
+        if (result.code !== 0) return null;
+        if (!result.stdout) return null;
+        return result.stdout;
+    } catch {
+        return null;
+    }
+}
+
+// Prefer the command-line tools over the native helper: Hex owns the clipboard
+// through wl-copy, and the native helper may not see that content under Wayland.
+async function readClipboardText(pi: ExtensionAPI): Promise<string | null> {
+    let text: string | null = null;
+    if (process.platform === "linux" && process.env.WAYLAND_DISPLAY) {
+        text = await runClipboardCommand(pi, "wl-paste", ["--no-newline", "--type", "text"]);
+    }
+    if (text === null && process.platform === "linux" && process.env.DISPLAY) {
+        text = await runClipboardCommand(pi, "xclip", ["-selection", "clipboard", "-out"]);
+        if (text === null) text = await runClipboardCommand(pi, "xsel", ["--clipboard", "--output"]);
+    }
+    if (text === null) {
+        try {
+            text = (await getNativeClipboard()?.getText()) ?? null;
+        } catch {
+            text = null;
+        }
+    }
+    // xclip returns the newline the clipboard holds; a dictation must not insert it.
+    const trimmed = text?.trim();
+    if (!trimmed) return null;
+    // An image or other binary payload can decode into control characters: never
+    // insert those into an answer.
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(trimmed)) return null;
+    return trimmed;
+}
+
+function isPasteKey(keybindings: any, data: string): boolean {
+    if (keybindings && typeof keybindings.matches === "function") {
+        try {
+            return Boolean(keybindings.matches(data, PASTE_KEYBINDING));
+        } catch {
+            return false;
+        }
+    }
+    return matchesKey(data, "ctrl+v");
+}
+
+async function askText(
+    ctx: any,
+    pi: ExtensionAPI,
+    question: string,
+    context: string | undefined,
+): Promise<string | undefined> {
+    return ctx.ui.custom<string | undefined>((tui: any, theme: any, kb: any, done: (result: string | undefined) => void) => {
+        let closed = false;
+        let focused = false;
+        let cachedLines: string[] | undefined;
+        let cachedWidth = -1;
+        const editor = new Editor(tui, createEditorTheme(theme));
+
+        editor.onSubmit = (value) => {
+            const trimmed = value.trim();
+            if (!trimmed) return;
+            finish(trimmed);
+        };
+
+        function refresh() {
+            cachedLines = undefined;
+            tui.requestRender();
+        }
+
+        function finish(value: string | undefined) {
+            if (closed) return;
+            closed = true;
+            done(value);
+        }
+
+        async function pasteFromClipboard() {
+            const text = await readClipboardText(pi);
+            if (closed || !text) return;
+            editor.insertTextAtCursor(text);
+            refresh();
+        }
+
+        function handleInput(data: string) {
+            if (matchesKey(data, Key.escape)) {
+                finish(undefined);
+                return;
+            }
+            if (isPasteKey(kb, data)) {
+                void pasteFromClipboard();
+                return;
+            }
+            editor.handleInput(data);
+            refresh();
+        }
+
+        function render(width: number): string[] {
+            // The cache MUST be keyed on width: pi-tui calls requestRender() but NOT
+            // invalidate() on terminal resize, so render() can be re-entered with a
+            // new width. Returning stale wider lines trips the TUI width guard and
+            // crashes the process.
+            if (cachedLines && cachedWidth === width) return cachedLines;
+
+            const lines: string[] = [];
+            const add = (text: string) => lines.push(truncateToWidth(text, width));
+
+            add(theme.fg("accent", "─".repeat(width)));
+            lines.push("");
+            addWrapped(lines, theme.fg("accent", ` ${question}`), width);
+            if (context) {
+                lines.push("");
+                addWrapped(lines, theme.fg("muted", ` ${context}`), width);
+            }
+            lines.push("");
+            for (const line of editor.render(Math.max(1, width - 2))) {
+                add(` ${line}`);
+            }
+            lines.push("");
+            add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+            add(theme.fg("accent", "─".repeat(width)));
+
+            cachedLines = lines;
+            cachedWidth = width;
+            return lines;
+        }
+
+        return {
+            // A component holding an Editor is focusable: pi sets `focused` on it, so the
+            // editor draws the hardware cursor instead of a fake one (see docs/tui.md).
+            get focused() {
+                return focused;
+            },
+            set focused(value: boolean) {
+                focused = value;
+                editor.focused = value;
+            },
+            render,
+            invalidate: () => {
+                cachedLines = undefined;
+            },
+            handleInput,
+        };
+    }, { blocked: { kind: "question", message: question } });
+}
+
 function formatAnswerForModel(answer: AskAnswer): string {
     switch (answer.type) {
         case "text":
@@ -202,6 +354,7 @@ function buildResult(question: string, context: string | undefined, mode: AskUse
 
 async function askSingleChoice(
     ctx: any,
+    pi: ExtensionAPI,
     question: string,
     context: string | undefined,
     options: AskOption[],
@@ -212,9 +365,10 @@ async function askSingleChoice(
         { id: "other", label: otherLabel, value: "__other__", isOther: true },
     ];
 
-    return ctx.ui.custom<AskAnswer | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer | null) => void) => {
+    return ctx.ui.custom<AskAnswer | null>((tui: any, theme: any, kb: any, done: (result: AskAnswer | null) => void) => {
         let optionIndex = 0;
         let editMode = false;
+        let closed = false;
         let cachedLines: string[] | undefined;
         let cachedWidth = -1;
         const editor = new Editor(tui, createEditorTheme(theme));
@@ -222,7 +376,7 @@ async function askSingleChoice(
         editor.onSubmit = (value) => {
             const trimmed = value.trim();
             if (!trimmed) return;
-            done({ type: "other", label: trimmed, value: trimmed });
+            finish({ type: "other", label: trimmed, value: trimmed });
         };
 
         function refresh() {
@@ -230,14 +384,52 @@ async function askSingleChoice(
             tui.requestRender();
         }
 
+        function finish(result: AskAnswer | null) {
+            if (closed) return;
+            closed = true;
+            done(result);
+        }
+
+        function openOther(prefill: string) {
+            editMode = true;
+            editor.setText(prefill);
+            refresh();
+        }
+
+        async function pasteFromClipboard() {
+            const text = await readClipboardText(pi);
+            if (closed || !text) return;
+            if (!editMode) openOther("");
+            editor.insertTextAtCursor(text);
+            refresh();
+        }
+
         function handleInput(data: string) {
             if (editMode) {
+                if (isPasteKey(kb, data)) {
+                    void pasteFromClipboard();
+                    return;
+                }
                 if (matchesKey(data, Key.escape)) {
                     editMode = false;
                     editor.setText("");
                     refresh();
                     return;
                 }
+                editor.handleInput(data);
+                refresh();
+                return;
+            }
+
+            // A dictation transcript arrives either as Ctrl+V or as a bracketed paste.
+            // It must land in the Other field instead of being dropped while the list
+            // has focus.
+            if (isPasteKey(kb, data)) {
+                void pasteFromClipboard();
+                return;
+            }
+            if (data.includes(BRACKETED_PASTE_START)) {
+                openOther("");
                 editor.handleInput(data);
                 refresh();
                 return;
@@ -256,12 +448,10 @@ async function askSingleChoice(
             if (matchesKey(data, Key.enter)) {
                 const selected = allOptions[optionIndex];
                 if (selected.isOther) {
-                    editMode = true;
-                    editor.setText("");
-                    refresh();
+                    openOther("");
                     return;
                 }
-                done({
+                finish({
                     type: "option",
                     label: selected.label,
                     value: selected.value,
@@ -270,7 +460,7 @@ async function askSingleChoice(
                 return;
             }
             if (matchesKey(data, Key.escape)) {
-                done(null);
+                finish(null);
             }
         }
 
@@ -335,6 +525,7 @@ async function askSingleChoice(
 
 async function askMultiChoice(
     ctx: any,
+    pi: ExtensionAPI,
     question: string,
     context: string | undefined,
     options: AskOption[],
@@ -352,9 +543,10 @@ async function askMultiChoice(
         submitItem,
     ];
 
-    return ctx.ui.custom<AskAnswer[] | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer[] | null) => void) => {
+    return ctx.ui.custom<AskAnswer[] | null>((tui: any, theme: any, kb: any, done: (result: AskAnswer[] | null) => void) => {
         let optionIndex = 0;
         let editMode = false;
+        let closed = false;
         let cachedLines: string[] | undefined;
         let cachedWidth = -1;
         const selected = new Map<string, AskAnswer>();
@@ -373,6 +565,30 @@ async function askMultiChoice(
             tui.requestRender();
         }
 
+        function finish(result: AskAnswer[] | null) {
+            if (closed) return;
+            closed = true;
+            done(result);
+        }
+
+        function otherPrefill(): string {
+            return selected.get("other")?.label ?? "";
+        }
+
+        function openOther(prefill: string) {
+            editMode = true;
+            editor.setText(prefill);
+            refresh();
+        }
+
+        async function pasteFromClipboard() {
+            const text = await readClipboardText(pi);
+            if (closed || !text) return;
+            if (!editMode) openOther(otherPrefill());
+            editor.insertTextAtCursor(text);
+            refresh();
+        }
+
         function toggleOption(item: DisplayOption) {
             if (selected.has(item.id)) {
                 selected.delete(item.id);
@@ -389,12 +605,30 @@ async function askMultiChoice(
 
         function handleInput(data: string) {
             if (editMode) {
+                if (isPasteKey(kb, data)) {
+                    void pasteFromClipboard();
+                    return;
+                }
                 if (matchesKey(data, Key.escape)) {
                     editMode = false;
-                    editor.setText(selected.get("other")?.label || "");
+                    editor.setText(otherPrefill());
                     refresh();
                     return;
                 }
+                editor.handleInput(data);
+                refresh();
+                return;
+            }
+
+            // A dictation transcript arrives either as Ctrl+V or as a bracketed paste.
+            // It must land in the Other field instead of being dropped while the list
+            // has focus.
+            if (isPasteKey(kb, data)) {
+                void pasteFromClipboard();
+                return;
+            }
+            if (data.includes(BRACKETED_PASTE_START)) {
+                openOther(otherPrefill());
                 editor.handleInput(data);
                 refresh();
                 return;
@@ -419,9 +653,7 @@ async function askMultiChoice(
                         selected.delete("other");
                         refresh();
                     } else {
-                        editMode = true;
-                        editor.setText("");
-                        refresh();
+                        openOther("");
                     }
                     return;
                 }
@@ -432,14 +664,12 @@ async function askMultiChoice(
             if (matchesKey(data, Key.enter)) {
                 if (current.isSubmit) {
                     if (selected.size > 0) {
-                        done(sortAnswers(Array.from(selected.values())));
+                        finish(sortAnswers(Array.from(selected.values())));
                     }
                     return;
                 }
                 if (current.isOther) {
-                    editMode = true;
-                    editor.setText(selected.get("other")?.label || "");
-                    refresh();
+                    openOther(otherPrefill());
                     return;
                 }
                 toggleOption(current);
@@ -447,7 +677,7 @@ async function askMultiChoice(
             }
 
             if (matchesKey(data, Key.escape)) {
-                done(null);
+                finish(null);
             }
         }
 
@@ -636,8 +866,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
                 const label = herdrLabel(params.question);
 
                 if (mode === "text") {
-                    const editorTitle = context ? `${params.question}\n\n${context}` : params.question;
-                    const answer = await withHerdrBlocked(pi, label, () => ctx.ui.editor(editorTitle));
+                    const answer = await withHerdrBlocked(pi, label, () => askText(ctx, pi, params.question, context));
                     if (answer === undefined) {
                         return cancelledResult(params.question, mode, context);
                     }
@@ -648,7 +877,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
                 if (mode === "single-select") {
                     const answer = await withHerdrBlocked(pi, label, () =>
-                        askSingleChoice(ctx, params.question, context, options),
+                        askSingleChoice(ctx, pi, params.question, context, options),
                     );
                     if (!answer) {
                         return cancelledResult(params.question, mode, context);
@@ -657,7 +886,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
                 }
 
                 const answers = await withHerdrBlocked(pi, label, () =>
-                    askMultiChoice(ctx, params.question, context, options),
+                    askMultiChoice(ctx, pi, params.question, context, options),
                 );
                 if (!answers) {
                     return cancelledResult(params.question, mode, context);
