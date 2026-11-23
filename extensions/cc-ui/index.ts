@@ -3189,31 +3189,15 @@ function cleanUserMessageLine(line: string): string {
 	return `${TRANSPARENT_BG}${trimAnsiRight(stripBackgroundAnsi(stripOsc133Zones(line)))}${TRANSPARENT_BG}`;
 }
 
-// Past prompts: one band in the theme's userMessageBg, with ❯ where tool rows put their ●
-// (column 1) and the text where tool labels start (column 3).
+// Past prompts: no background band, so the prompt sits on the terminal's own
+// background like everything else. Only the ❯ marker (column 1) and the text in
+// column 3 stay, so prompts line up with the tool rows' ● and labels.
 const USER_PROMPT_MARK = "❯";
 const USER_MESSAGE_PAD = 3;
-
-/** Background escape for the prompt band, or "" when the theme has no distinct userMessageBg. */
-function userMessageBandAnsi(): string {
-	const theme = getGlobalPiTheme();
-	const band = themeTokenRgb(theme, "userMessageBg");
-	const terminal = terminalDefaultColors(theme)?.background;
-	if (!band || (terminal && rgbToHex(band) === rgbToHex(terminal))) return "";
-	return rgbBgAnsi(theme, band);
-}
 
 function markUserPromptLine(line: string): string {
 	const mark = `${chromeAnsi(getGlobalPiTheme(), "outline")}${USER_PROMPT_MARK}\x1b[39m`;
 	return line.replace(/^((?:\x1b\[[0-9;]*m)*) {3}/, (_match, esc: string) => `${esc} ${mark} `);
-}
-
-/** Paint a full-width band behind a line, surviving resets inside it. */
-function withUserBand(line: string, width: number, band: string): string {
-	const content = clampLineWidth(line, width);
-	if (!band) return content;
-	const pad = " ".repeat(Math.max(0, width - visibleWidth(content)));
-	return `${band}${content.replace(/\x1b\[0?m|\x1b\[49m/g, (reset) => reset + band)}${pad}${TRANSPARENT_BG}`;
 }
 
 function visitMarkdownDescendants(root: unknown, visit: (md: InstanceType<typeof Markdown>) => void): void {
@@ -3253,8 +3237,9 @@ function patchUserMessageRender(): void {
 				}
 			}
 			makeMarkdownLinksCopySafe(child);
-			// The band is painted below, from the theme's concrete color; pi's own
-			// background would be the transparent override from applyToolBackgroundMode.
+			// No prompt background: drop the theme's userMessageBg fill so the markdown
+			// renders on the terminal's own background (also overridden in
+			// applyToolBackgroundMode, this covers the markdown's own style copy).
 			if (markdownAny.defaultTextStyle?.bgColor) {
 				markdownAny.defaultTextStyle.bgColor = undefined;
 				child.invalidate?.();
@@ -3266,12 +3251,11 @@ function patchUserMessageRender(): void {
 		const padded = typeof this.rebuild === "function" && "outputPad" in this;
 		const lines = originalRender.call(this, padded ? safeWidth : Math.max(1, safeWidth - 2));
 		if (!Array.isArray(lines) || lines.length === 0) return lines;
-		// Drop the top and bottom padding rows: one compact band.
+		// Drop the top and bottom padding rows: one compact block.
 		let body = (lines.length > 2 ? lines.slice(1, -1) : lines).map(cleanUserMessageLine);
 		if (!padded) body = body.map((line) => line.replace(/^((?:\x1b\[[0-9;]*m)*)/, "$1  "));
 		body[0] = markUserPromptLine(body[0]);
-		const band = userMessageBandAnsi();
-		const rendered = body.map((line) => withUserBand(line, safeWidth, band));
+		const rendered = body.map((line) => clampLineWidth(line, safeWidth));
 		return storeMessageRenderCache(this, width, applyTerminalCopyZones(rendered));
 	};
 	proto[USER_MESSAGE_PATCH_FLAG] = true;

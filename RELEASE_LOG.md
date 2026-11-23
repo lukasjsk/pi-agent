@@ -2,6 +2,12 @@
 
 This log records notable functionality added to this configuration repository. Sections are headed by release dates; no release artifacts are published.
 
+## 2026-11-23
+
+### Changed
+
+- Past prompts in [`extensions/cc-ui/`](extensions/cc-ui) no longer sit in a background band. The extension stops painting the theme's `userMessageBg` behind a user message and drops that fill from the markdown's own style copy, so a prompt now renders on the terminal's background like the assistant messages and the tool rows around it; only the `❯` marker at column 1 and the three-column text alignment stay, so prompts still line up with the tool rows' `●` and labels. The reason: the full-width band made a long transcript look striped, and it had to repaint itself after every reset inside a line (`withUserBand`), which was fragile once themed markdown put its own colors and resets in the text.
+
 ## 2026-11-21
 
 ### Fixed
